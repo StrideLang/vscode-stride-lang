@@ -1,0 +1,25 @@
+{
+    "name": "stride-language",
+    "displayName": "Stride Language",
+    "description": "Support for the Stride language and code generator system",
+    "version": "0.0.1",
+    "engines": {
+        "vscode": "^1.54.0"
+    },
+    "categories": [
+        "Programming Languages"
+    ],
+    "contributes": {
+        "languages": [{
+            "id": "stride",
+            "aliases": ["Stride", "stride"],
+            "extensions": [".stride"],
+            "configuration": "./language-configuration.json"
+        }],
+        "grammars": [{
+            "language": "stride",
+            "scopeName": "source.stride",
+            "path": "./syntaxes/stride.tmLanguage.json"
+        }]
+    }
+}

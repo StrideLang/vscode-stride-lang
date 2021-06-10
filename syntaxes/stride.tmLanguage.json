@@ -1,0 +1,168 @@
+{
+	"$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+	"name": "Stride",
+	"patterns": [
+		{
+			"include": "#function"
+		},
+		{
+			"include": "#portproperty"
+		},
+		{
+			"include": "#block"
+		},
+		{
+			"include": "#port"
+		},
+		{
+			"include": "#keywords"
+		},
+		{
+			"include": "#callable"
+		},
+		{
+			"include": "#type"
+		},
+		{
+			"include": "#strings"
+		},
+		{
+			"include": "#apostrings"
+		},
+		{
+			"include": "#using"
+		},
+		{
+			"include": "#stream"
+		},
+		{
+			"include": "#use"
+		},
+		{
+			"comment": "Use this to explain the function of the rule, if necessary",
+			"name": "comment.line.example",
+			"match": "#.*$"
+		}
+	],
+	"repository": {
+		"keywords": {
+			"patterns": [{
+				"name": "keyword.control.stride",
+				"match": "\\b(none|on|off|use|version|import)\\b"
+			}]
+		},
+		"strings": {
+			"name": "string.quoted.double.stride",
+			"begin": "\"",
+			"end": "\"",
+			"patterns": [
+				{
+					"name": "constant.character.escape.stride",
+					"match": "\\\\."
+				}
+			]
+		},
+		"apostrings": {
+			"name": "string.quoted.single.stride",
+			"begin": "'",
+			"end": "'",
+			"patterns": [
+				{
+					"name": "constant.character.escape.stride",
+					"match": "\\\\."
+				}
+			]
+		},
+		"block": {
+			"name": "entity.name.tag.stride",
+			"patterns": [
+				{
+					"name": "entity.name.tag.stride",
+					"match": "\\b([A-Z][a-zA-Z_0-9]*)\\b"
+				}
+			]
+		},
+		"port": {
+			"name": "entity.other.attribute-name.stride",
+			"patterns": [
+				{
+					"name": "entity.other.attribute-name.stride",
+					"match": "\\b([a-z][a-zA-Z_0-9]*)\\s*:"
+				}
+			]
+		},
+		"portproperty": {
+			"name": "entity.other.attribute-name.stride",
+			"patterns": [
+				{
+					"name": "entity.other.attribute-name.stride",
+					"match": "([A-Z][a-zA-Z_0-9]*)\\.([a-z][a-zA-Z_0-9]*)",
+					"captures" : {
+						"1": {
+							"name": "entity.name.tag.stride"
+						},
+						"2": {
+							"name": "entity.other.attribute-name.stride"
+						}
+					}
+				}
+			]
+		},
+		"type": {
+			"name": "entity.name.type.stride",
+			"patterns": [
+				{
+					"name": "entity.name.type.stride",
+					"match": "\\b([a-z][a-zA-Z_0-9]*)\\s+([a-zA-Z_0-9]*)",
+					"captures" : {
+						"1": {
+							"name": "entity.name.type.stride"
+						},
+						"2": {
+							"name": "entity.name.tag.stride"
+						}
+					}
+				}
+			]
+		},
+		"callable": {
+			"name": "entity.name.type.stride",
+			"patterns": [
+				{
+					"name": "entity.name.type.stride",
+					"match": "\\b(module|reaction|loop)\\s+([a-zA-Z_0-9]*)",
+					"captures" : {
+						"1": {
+							"name": "entity.name.type.stride"
+						},
+						"2": {
+							"name": "entity.name.function.stride"
+						}
+					}
+				}
+			]
+		},
+		"stream": {
+			"name": "keyword.operator.stride",
+			"patterns": [
+				{
+					"name": "keyword.operator.stride",
+					"match": ">>"
+				}
+			]
+		},
+		"function": {
+			"patterns": [
+				{
+					"match": "([A-Z][a-zA-Z_0-9]*)\\s*\\(",
+					"captures" : {
+						"1": {
+							"name": "entity.name.function.stride"
+						}
+					}
+				}
+			]
+		}
+	},
+	"scopeName": "source.stride"
+}
