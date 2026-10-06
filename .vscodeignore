@@ -10,3 +10,10 @@ tsconfig.json
 **/*.ts
 .git/**
 .gitignore
+strideroot/frameworks/**
+strideroot/platforms/**
+strideroot/systems/**
+strideroot/plugins/**
+strideroot/local/**
+strideroot/testing/**
+strideroot/tools/**

@@ -1,0 +1,118 @@
+
+type _Alias {
+	typeName: "alias"
+	properties: [
+		typeProperty InputName {
+			name: "block"
+			types: [""]
+			default: none
+			required: off
+		}
+	]
+}
+
+type _Typed {
+	typeName: "_typed"
+	properties: [
+		typeProperty TypeProperty {
+			name: "type"
+			types: [_StringLiteral, ""] # allow type block
+			default: none # Should be resolved from platform and conext if not explicitly defined
+			required: off
+		}
+	]
+}
+
+type _Streamable {
+	typeName: "_streamable"
+	properties: [
+		typeProperty InputName {
+			name: "inputName"
+			types: [_StringLiteral, ""]
+			default: none
+			required: off
+		},
+		typeProperty OutputName {
+			name: "outputName"
+			types: [_StringLiteral, ""]
+			default: none
+			required: off
+		}
+	]
+	inherits: [_Rated]
+}
+
+type _Resetable {
+	typeName: "_resetable"
+	properties: [
+		typeProperty Reset {
+			name: "reset"
+			types: [""]
+			default: none
+			required: off
+		}
+	]
+}
+
+type _Rated {
+	typeName: "rated"
+	properties: [
+		typeProperty Rate {
+			name: "rate"
+			types: [_IntLiteral, _RealLiteral, _PortProperty, _NoneLiteral]
+			default: none
+			required: off
+		}
+	]
+	inherits: [_Resetable]
+}
+
+type _DomainMember {
+	typeName: "domainMember"
+	properties: [
+		typeProperty Domain {
+			name: "domain"
+			types: ["", _StringLiteral, _DomainDefinition]
+			default: none
+			required: off
+		}
+	]
+	inherits: [_Base]
+}
+
+type _CodeGenerator {
+	typeName: "codeGenerator"
+	properties: [
+		typeProperty {
+			name: "blocks"
+			types: [ constrainedList {anyOf: [_Streamable, _Reaction, _Module]} ]
+			default: []
+			required: off
+		},
+		typeProperty Streams {
+			name: "streams"
+			types: [ constrainedList {anyOf: [_StreamType]} ]
+			default: none
+			required: on
+		}
+	]
+}
+
+type _Base {
+	typeName: "base"
+	properties: [
+		typeProperty Inherits {
+			name: "inherits"
+			types: [_StringLiteral, ""]
+			default: [ _Base ]
+			required: off
+		},
+		typeProperty Meta {
+			name: "meta"
+			types: [_StringLiteral, _Constant]
+			default: ""
+			required: off
+		}
+	]
+	inherits: []
+}

@@ -1,0 +1,57 @@
+
+module BiQuad {
+	ports: [
+        mainInputPort MainInputPort {
+			block: Input
+        },
+		mainOutputPort OutputPort {
+			block: Output
+        },
+		propertyInputPort CenterFrequencyProperty {
+			name: "centerFrequency"
+			block: CenterFrequency
+			meta: "The center frequency of the filter."
+		}
+		propertyInputPort ResonanceProperty {
+			name: "resonance"
+			block: Resonance
+			meta: "Resonance (Q) amount. Should be greater than on equal to 1.0."
+		}
+	]
+	blocks: [
+#		signal Type { default: "BandPass" },
+		signal CenterFrequency {},
+		signal Resonance { default: 50},
+#		switch Reset {},
+		signal Xn[2] {},
+		signal Yn[2] {},
+		signal A[2] {},
+		signal B[3] {},
+		signal Temp {},
+		signal W0 {},
+		signal Alpha {},
+		signal W0Cos {}
+	]
+	streams: [
+#		Type >> Null;
+		# For BP resonant filter
+#		2 * _Pi * CenterFrequency /AudioRate >> W0 >> Sin() >> Temp;
+#		[Temp, 2.0 * Resonance] >> Divide () >> [ Alpha, B[1] , Inverse() >> B[3] ];
+
+		2 * _Pi * CenterFrequency /AudioRate >> W0 >> Sin() >> Temp;
+		Temp / (2*Resonance) >> Alpha >> B[1];
+		-Alpha >> B[3];
+		1 + Alpha >> A[1];
+		W0 >> Cos() >> W0Cos;
+		[W0Cos, 2] >> Multiply() >> A[2];
+		1 - Alpha >> A[3];
+
+		# Filter Processing
+		(Input * B[0] + Xn[0] * B[1] + Xn[1] * B[2] - Yn[0] * A[1] - Yn[1] * A[2]) / A[0] >> Output;
+		Xn[0] >> Xn[1];
+		Input >> Xn[0];
+		Yn[0] >> Yn[1];
+		Output >> Yn[0];
+	]
+	meta: "BiQuad filter"
+}

@@ -1,0 +1,131 @@
+type _MainInputPort {
+	typeName: "mainInputPort"
+	inherits: [_Port, _PortAttributes]
+	meta: ""
+}
+
+type _MainOutputPort {
+	typeName: "mainOutputPort"
+	inherits: [_Port, _PortAttributes]
+	meta: ""
+}
+
+type _PropertyInputPort {
+	typeName: "propertyInputPort"
+	properties: [
+		typeProperty Default {
+			name: "default"
+			types: [""]
+			default: none
+			required: off
+		}
+	]
+	inherits: [_Port, _PortAttributes]
+	meta: ""
+}
+
+type _PropertyOutputPort {
+	typeName: "propertyOutputPort"
+	properties: [
+		typeProperty Default {
+			name: "default"
+			types: [""]
+			default: none
+			required: off
+		}
+	]
+	inherits: [_Port, _PortAttributes]
+	meta: ""
+}
+
+type _PortAttributes {
+	typeName: "_portAttributes"
+	properties: [
+		typeProperty Rate {
+			name: "rate"
+			types: [""]
+			default: 0
+			writeable: off
+			required: off
+		},
+		typeProperty Domain {
+			name: "domain"
+			types: [""] # This should be made to accept type handles
+			default: none
+			writeable: off
+			required: off
+		},
+		typeProperty Type {
+			name: "type"
+			types: [""] # This should be made to accept type handles
+			default: none
+			writeable: off
+			required: off
+		},
+		typeProperty Size {
+			name: "size"
+			types: [""] # This should be made to accept type handles
+			default: none
+			writeable: off
+			required: off
+		}
+	]
+	inherits: []
+	meta: "Port attributes should be set by the resolver, and only readable externally"
+}
+
+type _Port {
+	typeName: "port"
+	properties: [
+		typeProperty Name {
+			name: "name"
+			types: [_StringLiteral]
+			default: ""
+			required: off
+		},
+		typeProperty Block {
+			name: "block"
+			types: [_Block]
+			default: none
+			required: on
+		},
+		typeProperty Type {
+			name: "type"
+			types: [""] # This should be made to accept type handles
+			default: none # None means undefined. Should be resolved from context, and if not possible should resolve to _DefaultSignalType
+			required: off
+		},
+		typeProperty Size {
+			name: "size"
+			types: [_IntType] 
+			default: 0 
+			required: off
+			public: on
+			meta: "Size of connected outer block"
+		},
+		typeProperty Rate {
+			name: "rate"
+			types: [_RealType]
+			default: 0
+			required: off
+			public: on
+			meta: "Rate of connected outer block"
+		}
+	]
+	inherits: [_Base]
+	meta: ""
+}
+
+
+type _Callable {
+	typeName: "callable"
+	properties: [
+		typeProperty Ports {
+			name: "ports"
+			types: [ _MainOutputPort, _MainInputPort, _PropertyOutputPort, _PropertyInputPort ] 
+			default: []
+			required: off
+		}
+	]
+	meta: "Objects can be used as functions within streams"
+}

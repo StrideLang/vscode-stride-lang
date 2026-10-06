@@ -1,0 +1,152 @@
+type _TransitionType {
+    typeName: "transition"
+	properties: [
+		typeProperty {
+			name: "signal"
+			types: [ "" ]
+			default: none
+			required: off
+			meta: "The event or signal that triggers this transition."
+		},
+		typeProperty {
+			name: "guard"
+			types: [ _Streamable, _NoneLiteral ]
+			default: none
+			required: off
+			meta: "Guard signal or variable block required for the transition (or none)."
+		},
+		typeProperty {
+			name: "triggerOnGuard"
+			types: [ _SwitchLiteral ]
+			default: off
+			required: off
+			meta: "If on, transition triggers directly on guard signal changes."
+		},
+		typeProperty {
+			name: "onTransition"
+			types: [ constrainedList { anyOf: [_StreamType] } ]
+			default: []
+			required: off
+			meta: "Stream expressions to execute during the transition."
+		},
+		typeProperty {
+			name: "targetState"
+			types: [ _StateType, _NoneLiteral ]
+			default: none
+			required: off
+			meta: "The target state for the transition."
+		}
+    ]
+    inherits: [_Base]
+}
+
+type _StateType {
+    typeName: "state"
+    properties: [
+		typeProperty {
+			name: "states"
+			types: [
+				constrainedList {
+					uniqueItems: on
+					anyOf: [_StateType]
+				}
+			]
+			default: []
+			required: off
+			meta: "Sub-states for hierarchical state machines."
+		},
+		typeProperty {
+			name: "initialState"
+			types: [_StateType, _NoneLiteral]
+			default: none
+			required: off
+			meta: "The default sub-state to enter when this state becomes active."
+		},
+		typeProperty {
+			name: "isParallel"
+			types: [_SwitchLiteral]
+			default: off
+			required: off
+			meta: "If on, all child states are active concurrently (orthogonal regions)."
+		},
+		typeProperty {
+			name: "resumeLastState"
+			types: [_SwitchLiteral]
+			default: off
+			required: off
+			meta: "If on, remembers and resumes the last active child state(s) upon re-entry instead of defaulting to initialState."
+		},
+		typeProperty {
+			name: "isFinal"
+			types: [_SwitchLiteral]
+			default: off
+			required: off
+			meta: "If on, reaching this state indicates completion of its parent state."
+		},
+		typeProperty {
+			name: "blocks"
+			types: [ constrainedList { anyOf: [_Streamable, _Reaction, _Module] } ]
+			default: []
+			required: off
+			meta: "Context or shared variables available within this state."
+		},
+		typeProperty {
+			name: "updateGuard"
+			types: [ constrainedList { anyOf: [_StreamType] } ]
+			default: []
+			required: off
+			meta: "Stream expressions executed to update guard conditions before transition evaluation."
+		},
+		typeProperty {
+			name: "updateGuardOnDomain"
+			types: [_SwitchLiteral]
+			default: off
+			required: off
+			meta: "If on, updateGuard streams execute unconditionally on every domain tick."
+		},
+		typeProperty {
+			name: "onEntry"
+			types: [ constrainedList { anyOf: [_StreamType] } ]
+			default: []
+			required: off
+			meta: "Stream expressions executed exactly once when entering this state."
+		},
+		typeProperty {
+			name: "onProcess"
+			types: [ constrainedList { anyOf: [_StreamType] } ]
+			default: []
+			required: off
+			meta: "Stream expressions executed continuously while in this state (e.g., per tick)."
+		},
+		typeProperty {
+			name: "onExit"
+			types: [ constrainedList { anyOf: [_StreamType] } ]
+			default: []
+			required: off
+			meta: "Stream expressions executed exactly once before exiting this state."
+		},
+		typeProperty {
+			name: "onDone"
+			types: [
+				constrainedList {
+					anyOf: [_TransitionType]
+				}
+			]
+			default: []
+			required: off
+			meta: "Transitions to evaluate automatically when this state reaches a final child state."
+		},
+		typeProperty {
+			name: "transitions"
+			types: [
+				constrainedList {
+					anyOf: [_TransitionType]
+				}
+			]
+			default: []
+			required: off
+			meta: "Valid transitions originating from this state."
+		}
+    ]
+    inherits: [_Base]
+}

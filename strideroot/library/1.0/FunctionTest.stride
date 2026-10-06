@@ -1,0 +1,32 @@
+# FunctionTest.stride
+
+type _FunctionTest {
+	typeName: "functionTest"
+	properties: [
+		typeProperty Function {
+			name: "function"
+			types: [""]
+			default: none
+			required: on
+		}
+		typeProperty Prepare {
+			name: "prepare"
+			types: [""]
+			default: none
+			required: on
+		}
+		typeProperty Validate {
+			name: "validate"
+			types: [""]
+			default: none
+			required: on
+		}
+		typeProperty Timeout {
+			name: "timeout"
+			types: ["real"]
+			default: 0.0
+			required: off
+		}
+	]
+	inherits: [_Base]
+}

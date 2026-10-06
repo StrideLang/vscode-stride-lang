@@ -1,0 +1,17 @@
+# Assertions.stride
+
+module ExpectEqual {
+	ports: [
+		mainOutputPort OutputPort {
+			block: Expected
+		},
+		mainInputPort InputPort {
+			block: Actual
+		}
+	]
+	blocks: [
+	]
+	streams: [
+		Actual >> Expected;
+	]
+}

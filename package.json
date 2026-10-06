@@ -63,6 +63,11 @@
                     "default": "",
                     "description": "Path to the Stride Language Server binary (stride-lsp.exe)."
                 },
+                "stride.strideroot": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Path to the Stride root directory containing standard library definitions (overrides environment variable and bundled fallback library)."
+                },
                 "stride.includePaths": {
                     "type": "array",
                     "items": {

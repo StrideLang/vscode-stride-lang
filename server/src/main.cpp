@@ -253,9 +253,14 @@ std::string findStrideRoot() {
     std::vector<std::string> candidates = {
         "C:/Users/Andres/source/repos/Stride/strideroot",
         "C:\\Users\\Andres\\source\\repos\\Stride\\strideroot",
-        "C:/Users/Andres/source/repos/boardgame/libgame/external/stridejit/tests/data",
         "../../Stride/strideroot",
-        "../Stride/strideroot"
+        "../Stride/strideroot",
+        "C:/Users/Andres/source/repos/boardgame/libgame/external/stridejit/tests/data",
+        "C:/Users/Andres/source/repos/vscode-stride-lang/strideroot",
+        "strideroot",
+        "./strideroot",
+        "../strideroot",
+        "../../strideroot"
     };
     for (const auto &c : candidates) {
         if (std::filesystem::exists(c)) return c;

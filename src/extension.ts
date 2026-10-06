@@ -32,6 +32,7 @@ import {
 } from 'vscode-languageclient/node';
 
 let client: LanguageClient | undefined;
+let extensionContext: ExtensionContext | undefined;
 
 function findServerBinary(context: ExtensionContext): string | undefined {
     const config = workspace.getConfiguration('stride');
@@ -460,7 +461,14 @@ function findKnownLibraryFiles(): string[] {
     const files: string[] = [];
     const rootDirs: string[] = [];
 
-    if (process.env.STRIDEROOT) {
+    const config = workspace.getConfiguration('stride');
+    const configuredStrideroot = config.get<string>('strideroot');
+    if (configuredStrideroot && fs.existsSync(configuredStrideroot)) {
+        rootDirs.push(path.join(configuredStrideroot, 'library'));
+        rootDirs.push(configuredStrideroot);
+    }
+
+    if (process.env.STRIDEROOT && fs.existsSync(process.env.STRIDEROOT)) {
         rootDirs.push(path.join(process.env.STRIDEROOT, 'library'));
         rootDirs.push(process.env.STRIDEROOT);
     }
@@ -486,9 +494,18 @@ function findKnownLibraryFiles(): string[] {
         }
     }
 
-    const config = workspace.getConfiguration('stride');
     const includePaths = config.get<string[]>('includePaths') || [];
     rootDirs.push(...includePaths);
+
+    // Bundled strideroot is strictly the final fallback
+    if (extensionContext) {
+        const bundledRoot = extensionContext.asAbsolutePath('strideroot');
+        if (fs.existsSync(bundledRoot)) {
+            const bundledLib = path.join(bundledRoot, 'library');
+            if (!rootDirs.includes(bundledLib)) rootDirs.push(bundledLib);
+            if (!rootDirs.includes(bundledRoot)) rootDirs.push(bundledRoot);
+        }
+    }
 
     const visitedDirs = new Set<string>();
 
@@ -744,8 +761,13 @@ function getAllTypes(document: TextDocument): Map<string, TypeInfo> {
             const content = fs.readFileSync(schemaPath, 'utf8');
             const parsed = parseTypesFromText(content, schemaPath);
             const isStandardLib = schemaPath.includes('strideroot') || schemaPath.includes('library');
+            const isBundledLib = extensionContext && schemaPath.startsWith(extensionContext.extensionPath);
             for (const t of parsed) {
                 const existing = typeMap.get(t.name) || (t.typeName ? typeMap.get(t.typeName) : undefined);
+                // Bundled fallback definitions must never override any existing definitions
+                if (existing && isBundledLib) {
+                    continue;
+                }
                 // Never overwrite a richer standard library definition with a less complete stub
                 if (existing && !isStandardLib && existing.properties.length > t.properties.length) {
                     continue;
@@ -822,7 +844,11 @@ function getAllLibrarySymbols(document: TextDocument): Map<string, LibrarySymbol
         try {
             const content = fs.readFileSync(libPath, 'utf8');
             const parsed = parseLibrarySymbols(content, libPath);
+            const isBundledLib = extensionContext && libPath.startsWith(extensionContext.extensionPath);
             for (const s of parsed) {
+                if (symbolMap.has(s.name) && isBundledLib) {
+                    continue;
+                }
                 symbolMap.set(s.name, s);
             }
         } catch (e) {}
@@ -958,60 +984,154 @@ function renderTypeHover(typeInfo: TypeInfo, allTypes: Map<string, TypeInfo>): M
     return md;
 }
 
-function renderPropertyHover(propName: string, allTypes: Map<string, TypeInfo>): MarkdownString | undefined {
-    let foundProp: PropertyInfo | undefined;
-    let foundInType: TypeInfo | undefined;
+interface EnclosingDecl {
+    kind: string;
+    name: string;
+    start: number;
+    end: number;
+    line: number;
+}
 
-    for (const [_, typeInfo] of allTypes.entries()) {
-        const p = typeInfo.properties.find(x => x.name === propName);
-        if (p) {
-            foundProp = p;
-            foundInType = typeInfo;
-            if (p.filePath) {
-                break;
+function findEnclosingDeclarations(text: string): EnclosingDecl[] {
+    const clean = stripComments(text);
+    const decls: EnclosingDecl[] = [];
+    const declHeaderRegex = /\b([_a-zA-Z0-9]+)\s+([_a-zA-Z0-9]+)\s*(?=\{)/g;
+    let match;
+
+    while ((match = declHeaderRegex.exec(clean)) !== null) {
+        const kind = match[1];
+        const name = match[2];
+        const headerEnd = match.index + match[0].length;
+        const block = extractBraceBlock(clean, headerEnd);
+        if (!block) continue;
+
+        let line = 1;
+        for (let i = 0; i < match.index; i++) {
+            if (clean[i] === '\n') line++;
+        }
+
+        decls.push({
+            kind,
+            name,
+            start: match.index,
+            end: block.endIndex,
+            line
+        });
+    }
+
+    return decls;
+}
+
+function getInnermostEnclosingDeclaration(text: string, offset: number): EnclosingDecl | undefined {
+    const allDecls = findEnclosingDeclarations(text);
+    let best: EnclosingDecl | undefined = undefined;
+
+    for (const d of allDecls) {
+        if (offset >= d.start && offset <= d.end) {
+            if (!best || (d.end - d.start < best.end - best.start)) {
+                best = d;
             }
         }
     }
 
-    if (foundProp) {
-        let body = `<div style="${HOVER_STYLE}">\n\n`;
-        body += `**Property \`${propName}:\`**\n\n`;
+    return best;
+}
 
-        if (foundProp.types && foundProp.types.length > 0) {
-            body += `- **Allowed Types**: \`${foundProp.types.join(', ')}\`\n`;
-        }
-
-        if (foundProp.required !== undefined) {
-            body += `- **Required**: \`${foundProp.required ? 'on (true)' : 'off (false)'}\`\n`;
-        }
-
-        if (foundProp.defaultValue !== undefined) {
-            body += `- **Default**: \`${foundProp.defaultValue}\`\n`;
-        }
-
-        if (foundProp.meta) {
-            body += `\n---\n*${foundProp.meta}*\n`;
-        }
-
-        body += `\n---\n`;
-        if (foundProp.filePath) {
-            body += `📍 **Declared in**: ${formatClickableLink(foundProp.filePath, foundProp.line || 1)}`;
-            if (foundInType) {
-                body += ` (type \`${foundInType.name}\`)`;
+function findPropertyDeclaration(
+    propName: string,
+    allTypes: Map<string, TypeInfo>,
+    enclosingKind?: string
+): { prop: PropertyInfo; declaredIn: TypeInfo } | undefined {
+    if (enclosingKind) {
+        const targetKind = TYPE_ALIASES[enclosingKind] || enclosingKind;
+        const typeInfo = allTypes.get(enclosingKind) || allTypes.get(targetKind);
+        if (typeInfo) {
+            // 1. Direct properties
+            const directProp = typeInfo.properties?.find(p => p.name === propName);
+            if (directProp) {
+                return { prop: directProp, declaredIn: typeInfo };
             }
-            body += `\n`;
-        } else if (foundInType?.filePath) {
-            body += `📍 **Declared in**: ${formatClickableLink(foundInType.filePath, foundInType.line || 1)} (type \`${foundInType.name}\`)\n`;
+            // 2. Inherited properties
+            const visited = new Set<string>();
+            const queue = [...(typeInfo.inherits || [])];
+            while (queue.length > 0) {
+                const parentName = queue.shift()!;
+                if (visited.has(parentName)) continue;
+                visited.add(parentName);
+                const parentType = allTypes.get(parentName);
+                if (parentType) {
+                    const parentProp = parentType.properties?.find(p => p.name === propName);
+                    if (parentProp) {
+                        return { prop: parentProp, declaredIn: parentType };
+                    }
+                    if (parentType.inherits) {
+                        queue.push(...parentType.inherits);
+                    }
+                }
+            }
         }
+    }
 
-        body += `\n</div>`;
-        const md = new MarkdownString(body, true);
-        md.isTrusted = true;
-        md.supportHtml = true;
-        return md;
+    // Fallback: search all types
+    for (const [_, typeInfo] of allTypes.entries()) {
+        const p = typeInfo.properties?.find(x => x.name === propName);
+        if (p) {
+            return { prop: p, declaredIn: typeInfo };
+        }
     }
 
     return undefined;
+}
+
+function renderPropertyHover(
+    propName: string,
+    allTypes: Map<string, TypeInfo>,
+    enclosingKind?: string
+): MarkdownString | undefined {
+    const propMatch = findPropertyDeclaration(propName, allTypes, enclosingKind);
+    if (!propMatch) return undefined;
+
+    const { prop: foundProp, declaredIn: foundInType } = propMatch;
+
+    let body = `<div style="${HOVER_STYLE}">\n\n`;
+    let header = `**Property \`${propName}:\`**`;
+    if (enclosingKind && enclosingKind !== foundInType.name && enclosingKind !== foundInType.typeName) {
+        header += ` *(on \`${enclosingKind}\` via \`${foundInType.name}\`)*`;
+    }
+    body += `${header}\n\n`;
+
+    if (foundProp.types && foundProp.types.length > 0) {
+        body += `- **Allowed Types**: \`${foundProp.types.join(', ')}\`\n`;
+    }
+
+    if (foundProp.required !== undefined) {
+        body += `- **Required**: \`${foundProp.required ? 'on (true)' : 'off (false)'}\`\n`;
+    }
+
+    if (foundProp.defaultValue !== undefined) {
+        body += `- **Default**: \`${foundProp.defaultValue}\`\n`;
+    }
+
+    if (foundProp.meta) {
+        body += `\n---\n*${foundProp.meta}*\n`;
+    }
+
+    body += `\n---\n`;
+    if (foundProp.filePath) {
+        body += `📍 **Declared in**: ${formatClickableLink(foundProp.filePath, foundProp.line || 1)}`;
+        if (foundInType) {
+            body += ` (type \`${foundInType.name}\`)`;
+        }
+        body += `\n`;
+    } else if (foundInType?.filePath) {
+        body += `📍 **Declared in**: ${formatClickableLink(foundInType.filePath, foundInType.line || 1)} (type \`${foundInType.name}\`)\n`;
+    }
+
+    body += `\n</div>`;
+    const md = new MarkdownString(body, true);
+    md.isTrusted = true;
+    md.supportHtml = true;
+    return md;
 }
 
 function renderLibrarySymbolHover(sym: LibrarySymbol, allSymbols: Map<string, LibrarySymbol>): Hover {
@@ -1106,6 +1226,7 @@ function renderLibrarySymbolHover(sym: LibrarySymbol, allSymbols: Map<string, Li
 // ============================================================================
 
 function registerFallbackProviders(context: ExtensionContext) {
+    extensionContext = context;
     const symbolProvider: DocumentSymbolProvider = {
         provideDocumentSymbols(document: TextDocument): DocumentSymbol[] {
             const text = document.getText();
@@ -1176,26 +1297,41 @@ function registerFallbackProviders(context: ExtensionContext) {
             if (!wordRange) return undefined;
             const word = document.getText(wordRange);
 
-            // 1. Built-in scalar types
+            const allTypes = getAllTypes(document);
+            const lineText = document.lineAt(position.line).text;
+            const afterWord = lineText.substring(wordRange.end.character);
+            const isFollowedByColon = /^\s*:/.test(afterWord);
+            const charOffset = document.offsetAt(position);
+            const enclosingDecl = getInnermostEnclosingDeclaration(document.getText(), charOffset);
+
+            // 1. If followed by a colon, resolve property FIRST
+            if (isFollowedByColon) {
+                const propHover = renderPropertyHover(word, allTypes, enclosingDecl?.kind);
+                if (propHover) {
+                    return new Hover(propHover);
+                }
+            }
+
+            // 2. Built-in scalar types
             if (BUILTIN_SCALARS[word]) {
                 return createCompactHover(undefined, BUILTIN_SCALARS[word]);
             }
 
-            // 2. Type definitions (gameDefinition, _GameDefinitionType, _DomainDefinition, dict, playerType, supply, etc.)
-            const allTypes = getAllTypes(document);
-            const matchedType = allTypes.get(word);
-            if (matchedType) {
-                return new Hover(renderTypeHover(matchedType, allTypes));
+            // 3. Type definitions (only if not followed by colon / not a property key)
+            if (!isFollowedByColon) {
+                const matchedType = allTypes.get(word);
+                if (matchedType) {
+                    return new Hover(renderTypeHover(matchedType, allTypes));
+                }
             }
 
-            // 3. Property Keys (playerTypes, supplies, board, end, domain, type, default, rate, etc.)
-            const propHover = renderPropertyHover(word, allTypes);
+            // 4. Property Keys fallback
+            const propHover = renderPropertyHover(word, allTypes, enclosingDecl?.kind);
             if (propHover) {
                 return new Hover(propHover);
             }
 
-            // 4. Check for Import statements (e.g. import GameFunctions -> link to GameFunctions.stride)
-            const lineText = document.lineAt(position.line).text;
+            // 5. Check for Import statements (e.g. import GameFunctions -> link to GameFunctions.stride)
             const importMatch = /^\s*import\s+([_a-zA-Z0-9]+)/.exec(lineText);
             if (importMatch && importMatch[1] === word) {
                 for (const libPath of findKnownLibraryFiles()) {
@@ -1217,7 +1353,7 @@ function registerFallbackProviders(context: ExtensionContext) {
                 }
             }
 
-            // 5. Lexical Scoping & ScopeStack Resolution for local signals, switches, blocks, ports, and variables
+            // 6. Lexical Scoping & ScopeStack Resolution for local signals, switches, blocks, ports, and variables
             const rootScope = parseScopeTree(document.getText(), document.uri.fsPath);
             const scopeStack = buildScopeStack(rootScope, position.line + 1);
             const decl = findDeclarationInScopeStack(word, scopeStack);
@@ -1265,7 +1401,7 @@ function registerFallbackProviders(context: ExtensionContext) {
                 return createCompactHover(decl.signature, body);
             }
 
-            // 6. Library Symbols across the workspace / standard library files
+            // 7. Library Symbols across the workspace / standard library files
             const allSymbols = getAllLibrarySymbols(document);
             const libSym = allSymbols.get(word);
             if (libSym) {
@@ -1282,6 +1418,22 @@ function registerFallbackProviders(context: ExtensionContext) {
             if (!wordRange) return undefined;
             const word = document.getText(wordRange);
 
+            const allTypes = getAllTypes(document);
+            const lineText = document.lineAt(position.line).text;
+            const afterWord = lineText.substring(wordRange.end.character);
+            const isFollowedByColon = /^\s*:/.test(afterWord);
+            const charOffset = document.offsetAt(position);
+            const enclosingDecl = getInnermostEnclosingDeclaration(document.getText(), charOffset);
+
+            // 1. If followed by a colon, jump to property declaration
+            if (isFollowedByColon) {
+                const propMatch = findPropertyDeclaration(word, allTypes, enclosingDecl?.kind);
+                if (propMatch && propMatch.prop.filePath) {
+                    return new Location(Uri.file(propMatch.prop.filePath), new Position(Math.max(0, (propMatch.prop.line || 1) - 1), 0));
+                }
+            }
+
+            // 2. Local ScopeStack declarations
             const rootScope = parseScopeTree(document.getText(), document.uri.fsPath);
             const scopeStack = buildScopeStack(rootScope, position.line + 1);
             const decl = findDeclarationInScopeStack(word, scopeStack);
@@ -1289,12 +1441,20 @@ function registerFallbackProviders(context: ExtensionContext) {
                 return new Location(document.uri, new Position(Math.max(0, decl.line - 1), 0));
             }
 
-            const allTypes = getAllTypes(document);
-            const t = allTypes.get(word) || (TYPE_ALIASES[word] ? allTypes.get(TYPE_ALIASES[word]) : undefined);
-            if (t && t.filePath) {
-                return new Location(Uri.file(t.filePath), new Position(Math.max(0, (t.line || 1) - 1), 0));
+            // 3. Type definitions (if not followed by colon)
+            if (!isFollowedByColon) {
+                const t = allTypes.get(word) || (TYPE_ALIASES[word] ? allTypes.get(TYPE_ALIASES[word]) : undefined);
+                if (t && t.filePath) {
+                    return new Location(Uri.file(t.filePath), new Position(Math.max(0, (t.line || 1) - 1), 0));
+                }
+            } else {
+                const propMatch = findPropertyDeclaration(word, allTypes, enclosingDecl?.kind);
+                if (propMatch && propMatch.prop.filePath) {
+                    return new Location(Uri.file(propMatch.prop.filePath), new Position(Math.max(0, (propMatch.prop.line || 1) - 1), 0));
+                }
             }
 
+            // 4. Library Symbols
             const allSymbols = getAllLibrarySymbols(document);
             const sym = allSymbols.get(word);
             if (sym && sym.filePath) {
@@ -1552,6 +1712,7 @@ function registerFallbackProviders(context: ExtensionContext) {
 }
 
 export function activate(context: ExtensionContext) {
+    extensionContext = context;
     const serverExecutable = findServerBinary(context);
 
     if (!serverExecutable) {
@@ -1560,12 +1721,48 @@ export function activate(context: ExtensionContext) {
         return;
     }
 
+    const config = workspace.getConfiguration('stride');
+    const configuredStrideroot = config.get<string>('strideroot');
+    const bundledStrideroot = context.asAbsolutePath('strideroot');
+    let effectiveStrideroot: string | undefined = undefined;
+
+    if (configuredStrideroot && fs.existsSync(configuredStrideroot)) {
+        effectiveStrideroot = configuredStrideroot;
+    } else if (process.env.STRIDEROOT && fs.existsSync(process.env.STRIDEROOT)) {
+        effectiveStrideroot = process.env.STRIDEROOT;
+    } else {
+        const externalCandidates = [
+            'C:/Users/Andres/source/repos/Stride/strideroot',
+            'C:\\Users\\Andres\\source\\repos\\Stride\\strideroot',
+            '../../Stride/strideroot',
+            '../Stride/strideroot'
+        ];
+        for (const c of externalCandidates) {
+            if (fs.existsSync(c)) {
+                effectiveStrideroot = c;
+                break;
+            }
+        }
+        if (!effectiveStrideroot && fs.existsSync(bundledStrideroot)) {
+            effectiveStrideroot = bundledStrideroot;
+        }
+    }
+
     console.log(`Starting Stride Language Server: ${serverExecutable}`);
+    if (effectiveStrideroot) {
+        console.log(`Using Stride Root: ${effectiveStrideroot}`);
+    }
 
     const serverOptions: ServerOptions = {
         command: serverExecutable,
         args: [],
-        transport: TransportKind.stdio
+        transport: TransportKind.stdio,
+        options: effectiveStrideroot ? {
+            env: {
+                ...process.env,
+                STRIDEROOT: effectiveStrideroot
+            }
+        } : undefined
     };
 
     const clientOptions: LanguageClientOptions = {
