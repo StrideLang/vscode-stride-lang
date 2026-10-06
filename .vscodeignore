@@ -1,0 +1,12 @@
+.vscode/**
+.vscode-test/**
+src/**
+server/build/**
+server/CMakeFiles/**
+server/bin/Debug/**
+server/bin/Release/**
+tsconfig.json
+**/*.map
+**/*.ts
+.git/**
+.gitignore
