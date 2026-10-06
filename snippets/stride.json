@@ -1,0 +1,171 @@
+{
+    "Domain Definition": {
+        "prefix": "domain",
+        "body": [
+            "_domainDefinition ${1:RootDomain} {",
+            "\tframework: ${2:_JitFramework}",
+            "\trate: ${3:-1}",
+            "\tsubstitutions: [ ]",
+            "\tdomainIncludes: [ ]",
+            "\tinputs: [",
+            "\t\t${4:signal In { domain: $1, type: _RealType }}",
+            "\t]",
+            "\toutputs: [",
+            "\t\tsignal Out { domain: $1, type: _RealType }",
+            "\t]",
+            "\tdomainFunctionCode: ''",
+            "}",
+            "",
+            "$0"
+        ],
+        "description": "Create a Stride domain definition"
+    },
+    "Module": {
+        "prefix": "module",
+        "body": [
+            "module ${1:MyModule} {",
+            "\tports: [",
+            "\t\tmainInputPort InputPort {",
+            "\t\t\tblock: ${2:Input}",
+            "\t\t},",
+            "\t\tmainOutputPort OutputPort {",
+            "\t\t\tblock: ${3:Output}",
+            "\t\t}",
+            "\t]",
+            "\tblocks: [",
+            "\t\tsignal ${2:Input} { domain: OutputPort.domain, type: OutputPort.type }",
+            "\t\tsignal ${3:Output} { domain: OutputPort.domain, type: OutputPort.type }",
+            "\t]",
+            "\tstreams: [",
+            "\t\t${2:Input} >> ${3:Output};",
+            "\t]",
+            "\tmeta: \"${4:Module description}\"",
+            "}",
+            "$0"
+        ],
+        "description": "Create a Stride module"
+    },
+    "Reaction": {
+        "prefix": "reaction",
+        "body": [
+            "reaction ${1:MyReaction} {",
+            "\tports: [",
+            "\t\tpropertyInputPort ${2:TriggerPort} {",
+            "\t\t\tblock: ${3:Trigger}",
+            "\t\t}",
+            "\t]",
+            "\tblocks: [",
+            "\t\tswitch ${3:Trigger} { default: off }",
+            "\t]",
+            "\tstreams: [",
+            "\t\t$0",
+            "\t]",
+            "}"
+        ],
+        "description": "Create a Stride reaction"
+    },
+    "Loop": {
+        "prefix": "loop",
+        "body": [
+            "loop ${1:MyLoop} {",
+            "\tports: [",
+            "\t\tmainInputPort InputPort {",
+            "\t\t\tblock: ${2:Input}",
+            "\t\t},",
+            "\t\tmainOutputPort OutputPort {",
+            "\t\t\tblock: ${3:Output}",
+            "\t\t}",
+            "\t]",
+            "\tblocks: [",
+            "\t\tsignal ${2:Input}[InputPort.size] { type: _IntType }",
+            "\t\tsignal ${3:Output} { default: 0, type: _IntType }",
+            "\t\tsignal Index { default: 0, type: _IntType, reset: Reset }",
+            "\t\tswitch Done { default: off }",
+            "\t]",
+            "\tterminateWhen: Done",
+            "\tstreams: [",
+            "\t\t${2:Input}[Index] + ${3:Output} >> ${3:Output};",
+            "\t\tIndex + 1 >> Index;",
+            "\t\t[Index, InputPort.size] >> Equal() >> Done;",
+            "\t]",
+            "}",
+            "$0"
+        ],
+        "description": "Create a Stride loop block"
+    },
+    "State Machine": {
+        "prefix": "statemachine",
+        "body": [
+            "state ${1:State1} {",
+            "\ttransitions: [",
+            "\t\ttransition ${2:ToState2} {",
+            "\t\t\ttargetState: ${3:State2}",
+            "\t\t\tguard: [ ${4:1} ]",
+            "\t\t\tonTransition: [",
+            "\t\t\t\t$0",
+            "\t\t\t]",
+            "\t\t}",
+            "\t]",
+            "}",
+            "",
+            "state ${3:State2} {}",
+            "",
+            "state ${5:MyStateMachine} {",
+            "\tinitialState: ${1:State1}",
+            "\tstates: [${1:State1}, ${3:State2}]",
+            "}"
+        ],
+        "description": "Create a Stride state machine definition"
+    },
+    "State": {
+        "prefix": "state",
+        "body": [
+            "state ${1:StateName} {",
+            "\ttransitions: [",
+            "\t\t$0",
+            "\t]",
+            "}"
+        ],
+        "description": "Create a state definition"
+    },
+    "Transition": {
+        "prefix": "transition",
+        "body": [
+            "transition ${1:TransitionName} {",
+            "\ttargetState: ${2:TargetState}",
+            "\tguard: [ ${3:1} ]",
+            "\tonTransition: [",
+            "\t\t$0",
+            "\t]",
+            "}"
+        ],
+        "description": "Create a state transition"
+    },
+    "Platform Module": {
+        "prefix": "platformModule",
+        "body": [
+            "platformModule ${1:__MyPlatformModule}@${2:Type} {",
+            "\tinputs: [${3:_IntType}]",
+            "\toutputs: [${4:_IntType}]",
+            "\tprocessing: \"%%outtokens:0%% = ${5:llvm::add} %%intokens:0%%, %%intokens:1%%\"",
+            "\tinherits: [_Signal]",
+            "}",
+            "$0"
+        ],
+        "description": "Create a platform module with LLVM IR processing"
+    },
+    "Signal Declaration": {
+        "prefix": "signal",
+        "body": [
+            "signal ${1:Name} { domain: ${2:RootDomain}, type: ${3:_RealType}, default: ${4:0.0} }"
+        ],
+        "description": "Declare a Stride signal"
+    },
+    "Switch Declaration": {
+        "prefix": "switch",
+        "body": [
+            "switch ${1:Name} { default: ${2:off} }"
+        ],
+        "description": "Declare a Stride switch"
+    }
+}

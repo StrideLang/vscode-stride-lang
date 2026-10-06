@@ -1,25 +1,95 @@
 {
     "name": "stride-language",
     "displayName": "Stride Language",
-    "description": "Support for the Stride language and code generator system",
-    "version": "0.0.1",
+    "description": "Rich language support and Language Server for Stride, state machines, and game definitions",
+    "version": "0.1.0",
+    "publisher": "StrideLang",
     "engines": {
-        "vscode": "^1.54.0"
+        "vscode": "^1.75.0"
+    },
+    "main": "./out/extension.js",
+    "activationEvents": [
+        "onLanguage:stride"
+    ],
+    "scripts": {
+        "vscode:prepublish": "npm run compile",
+        "compile": "tsc -p ./",
+        "watch": "tsc -watch -p ./"
     },
     "categories": [
-        "Programming Languages"
+        "Programming Languages",
+        "Snippets"
+    ],
+    "keywords": [
+        "stride",
+        "stridejit",
+        "dsp",
+        "state-machine",
+        "llvm",
+        "libgame"
     ],
     "contributes": {
-        "languages": [{
-            "id": "stride",
-            "aliases": ["Stride", "stride"],
-            "extensions": [".stride"],
-            "configuration": "./language-configuration.json"
-        }],
-        "grammars": [{
-            "language": "stride",
-            "scopeName": "source.stride",
-            "path": "./syntaxes/stride.tmLanguage.json"
-        }]
+        "languages": [
+            {
+                "id": "stride",
+                "aliases": [
+                    "Stride",
+                    "stride"
+                ],
+                "extensions": [
+                    ".stride"
+                ],
+                "configuration": "./language-configuration.json"
+            }
+        ],
+        "grammars": [
+            {
+                "language": "stride",
+                "scopeName": "source.stride",
+                "path": "./syntaxes/stride.tmLanguage.json"
+            }
+        ],
+        "snippets": [
+            {
+                "language": "stride",
+                "path": "./snippets/stride.json"
+            }
+        ],
+        "configuration": {
+            "title": "Stride",
+            "properties": {
+                "stride.server.path": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Path to the Stride Language Server binary (stride-lsp.exe)."
+                },
+                "stride.includePaths": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "default": [],
+                    "description": "Additional search paths for Stride system and domain definitions."
+                },
+                "stride.trace.server": {
+                    "type": "string",
+                    "enum": [
+                        "off",
+                        "messages",
+                        "verbose"
+                    ],
+                    "default": "off",
+                    "description": "Traces the communication between VS Code and the Stride language server."
+                }
+            }
+        }
+    },
+    "dependencies": {
+        "vscode-languageclient": "^9.0.1"
+    },
+    "devDependencies": {
+        "@types/node": "^18.19.0",
+        "@types/vscode": "^1.75.0",
+        "typescript": "^5.3.3"
     }
 }

@@ -1,0 +1,6 @@
+node_modules/
+out/
+server/build/
+server/bin/
+*.log
+.DS_Store
