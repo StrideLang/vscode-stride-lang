@@ -588,9 +588,11 @@ std::string renderDocumentSymbol(ASTNode node) {
     if (type == "module" || type == "reaction" || type == "loop") {
         symbolKind = 6; // Method / Function
     } else if (type == "state" || type == "transition") {
-        symbolKind = 24; // Event / Struct
-    } else if (type == "_domainDefinition" || type == "gameDefinition" || type == "domainDeclaration") {
+        symbolKind = 23; // Struct
+    } else if (type == "_domainDefinition" || type == "gameDefinition" || type == "domainDeclaration" || type == "type") {
         symbolKind = 5; // Class
+    } else if (type == "typeProperty" || type == "property") {
+        symbolKind = 7; // Property
     } else if (type.find("Port") != std::string::npos || type == "port") {
         symbolKind = 11; // Interface
     } else if (type == "signal" || type == "switch" || type == "trigger") {

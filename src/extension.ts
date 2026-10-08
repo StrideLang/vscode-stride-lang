@@ -255,6 +255,8 @@ interface ScopeContext {
     kind: string;
     startLine: number;
     endLine: number;
+    startOffset: number;
+    endOffset: number;
     declarations: Map<string, ScopeDeclaration>;
     ports: Map<string, PortInfo>;
     boundPorts: Map<string, PortInfo>;
@@ -269,12 +271,12 @@ function stripComments(text: string): string {
 function parseDeclarationsFromBlock(blockBody: string, baseLine: number, filePath: string): ScopeDeclaration[] {
     const cleanBody = stripComments(blockBody);
     const decls: ScopeDeclaration[] = [];
-    const declHeaderRegex = /\b([_a-zA-Z0-9]+)\s+([_a-zA-Z0-9]+)\s*(?=\{)/g;
+    const declHeaderRegex = /\b([_a-zA-Z0-9]+)(?:\s+([_a-zA-Z0-9]+))?\s*(?=\{)/g;
     let match;
 
     while ((match = declHeaderRegex.exec(cleanBody)) !== null) {
         const kind = match[1];
-        const name = match[2];
+        let name = match[2];
         const headerEnd = match.index + match[0].length;
         const block = extractBraceBlock(cleanBody, headerEnd);
         if (!block) continue;
@@ -285,11 +287,21 @@ function parseDeclarationsFromBlock(blockBody: string, baseLine: number, filePat
             if (cleanBody[i] === '\n') dLine++;
         }
 
+        const nameMatch = /name\s*:\s*(?:["']([^"']+)["']|([_a-zA-Z0-9]+))/.exec(pBody);
+        const typeNameMatch = /typeName\s*:\s*(?:["']([^"']+)["']|([_a-zA-Z0-9]+))/.exec(pBody);
+        const blockMatch = /block\s*:\s*([_a-zA-Z0-9]+)/.exec(pBody);
+
+        if (!name) {
+            name = (nameMatch ? (nameMatch[1] || nameMatch[2]) : undefined) ||
+                   (typeNameMatch ? (typeNameMatch[1] || typeNameMatch[2]) : undefined) ||
+                   (blockMatch ? blockMatch[1] : undefined) ||
+                   `${kind}_line${dLine}`;
+        }
+
         const metaMatch = /meta\s*:\s*['"]([^'"]+)['"]/.exec(pBody);
         const typeMatch = /type\s*:\s*([_a-zA-Z0-9.]+)/.exec(pBody);
         const domainMatch = /domain\s*:\s*([_a-zA-Z0-9.]+)/.exec(pBody);
         const defMatch = /default\s*:\s*([^;\n\r]+)/.exec(pBody);
-        const blockMatch = /block\s*:\s*([_a-zA-Z0-9]+)/.exec(pBody);
 
         decls.push({
             name,
@@ -316,32 +328,49 @@ function parseScopeTree(text: string, filePath: string): ScopeContext {
         kind: 'root',
         startLine: 1,
         endLine: lines.length,
+        startOffset: 0,
+        endOffset: cleanText.length,
         declarations: new Map(),
         ports: new Map(),
         boundPorts: new Map(),
         children: []
     };
 
-    const containerRegex = /\b(_domainDefinition|gameDefinition|domainDeclaration|module|reaction|loop|state|transition|platformModule)\s*(?:([_a-zA-Z0-9]+))?\s*(?=\{)/g;
+    // Match all block declarations: kind [name] { ... }
+    const blockHeaderRegex = /\b([_a-zA-Z0-9]+)(?:\s+([_a-zA-Z0-9]+))?\s*(?=\{)/g;
     let match;
 
     const discoveredScopes: ScopeContext[] = [];
 
-    while ((match = containerRegex.exec(cleanText)) !== null) {
+    while ((match = blockHeaderRegex.exec(cleanText)) !== null) {
         const kind = match[1];
-        const name = match[2] || `${kind}_line${getLineNumber(cleanText, match.index)}`;
+        let name = match[2];
         const headerEnd = match.index + match[0].length;
         const block = extractBraceBlock(cleanText, headerEnd);
         if (!block) continue;
 
-        const startLine = getLineNumber(cleanText, match.index);
-        const endLine = getLineNumber(cleanText, headerEnd + block.body.length);
+        const startOffset = match.index;
+        const endOffset = headerEnd + block.body.length + 1; // including '}'
+        const startLine = getLineNumber(cleanText, startOffset);
+        const endLine = getLineNumber(cleanText, endOffset);
+
+        if (!name) {
+            const nameMatch = /name\s*:\s*(?:["']([^"']+)["']|([_a-zA-Z0-9]+))/.exec(block.body);
+            const typeNameMatch = /typeName\s*:\s*(?:["']([^"']+)["']|([_a-zA-Z0-9]+))/.exec(block.body);
+            const blockMatch = /block\s*:\s*([_a-zA-Z0-9]+)/.exec(block.body);
+            name = (nameMatch ? (nameMatch[1] || nameMatch[2]) : undefined) ||
+                   (typeNameMatch ? (typeNameMatch[1] || typeNameMatch[2]) : undefined) ||
+                   (blockMatch ? blockMatch[1] : undefined) ||
+                   `${kind}_line${startLine}`;
+        }
 
         const scope: ScopeContext = {
             name,
             kind,
             startLine,
             endLine,
+            startOffset,
+            endOffset,
             declarations: new Map(),
             ports: new Map(),
             boundPorts: new Map(),
@@ -356,54 +385,28 @@ function parseScopeTree(text: string, filePath: string): ScopeContext {
             }
         }
 
-        const listRegex = /\b(blocks|inputs|outputs|states|transitions)\s*:\s*\[/g;
-        let listMatch;
-        while ((listMatch = listRegex.exec(block.body)) !== null) {
-            const listStart = listMatch.index + listMatch[0].length - 1;
-            const listBlock = extractSquareBracketBlock(block.body, listStart);
-            if (listBlock) {
-                const listLine = getLineNumber(block.body, listMatch.index, startLine);
-                const localDecls = parseDeclarationsFromBlock(listBlock.body, listLine, filePath);
-                for (const d of localDecls) {
-                    if (scope.boundPorts.has(d.name)) {
-                        d.associatedPort = scope.boundPorts.get(d.name);
-                    }
-                    scope.declarations.set(d.name, d);
-                }
-            }
-        }
-
         const directDecls = parseDeclarationsFromBlock(block.body, startLine, filePath);
         for (const d of directDecls) {
-            if (!scope.declarations.has(d.name)) {
-                if (scope.boundPorts.has(d.name)) {
-                    d.associatedPort = scope.boundPorts.get(d.name);
-                }
-                scope.declarations.set(d.name, d);
+            if (scope.boundPorts.has(d.name)) {
+                d.associatedPort = scope.boundPorts.get(d.name);
             }
+            scope.declarations.set(d.name, d);
         }
 
         discoveredScopes.push(scope);
     }
 
-    const topDecls = parseDeclarationsFromBlock(text, 1, filePath);
-    for (const d of topDecls) {
-        const isInsideDiscoveredScope = discoveredScopes.some(s => d.line >= s.startLine && d.line <= s.endLine);
-        if (!isInsideDiscoveredScope) {
-            rootScope.declarations.set(d.name, d);
-        }
-    }
-
-    discoveredScopes.sort((a, b) => (a.endLine - a.startLine) - (b.endLine - b.startLine));
+    // Sort scopes by span size ascending so innermost scopes attach to the tightest enclosing parent
+    discoveredScopes.sort((a, b) => (a.endOffset - a.startOffset) - (b.endOffset - b.startOffset));
 
     for (const scope of discoveredScopes) {
         let parentScope: ScopeContext = rootScope;
         for (const candidate of discoveredScopes) {
             if (candidate !== scope &&
-                candidate.startLine <= scope.startLine &&
-                candidate.endLine >= scope.endLine) {
+                candidate.startOffset <= scope.startOffset &&
+                candidate.endOffset >= scope.endOffset) {
                 if (parentScope === rootScope ||
-                    (candidate.endLine - candidate.startLine < parentScope.endLine - parentScope.startLine)) {
+                    (candidate.endOffset - candidate.startOffset < parentScope.endOffset - parentScope.startOffset)) {
                     parentScope = candidate;
                 }
             }
@@ -1311,6 +1314,8 @@ function registerFallbackProviders(context: ExtensionContext) {
                     return SymbolKind.Struct;
                 } else if (kindStr === '_domainDefinition' || kindStr === 'gameDefinition' || kindStr === 'domainDeclaration' || kindStr === 'type') {
                     return SymbolKind.Class;
+                } else if (kindStr === 'typeProperty' || kindStr === 'property') {
+                    return SymbolKind.Property;
                 } else if (kindStr.includes('Port') || kindStr === 'port') {
                     return SymbolKind.Interface;
                 }
