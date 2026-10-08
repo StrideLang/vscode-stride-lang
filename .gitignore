@@ -4,3 +4,5 @@ server/build/
 server/bin/
 *.log
 .DS_Store
+.vscode/settings.json
+
