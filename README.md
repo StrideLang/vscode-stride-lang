@@ -47,6 +47,28 @@ This outputs `stride-lsp.exe` directly into `server/bin/`, where the VS Code ext
 
 ---
 
+## Testing & Development
+
+You can test and debug the extension directly using VS Code's Extension Development Host:
+
+### 1. Launch the Extension Host
+1. Open the `vscode-stride-lang` repository in VS Code.
+2. Ensure dependencies are compiled:
+   ```powershell
+   npm install
+   npm run compile
+   ```
+3. Press **`F5`** (or go to the **Run and Debug** panel and select **Run Extension**).
+4. A new window labeled `[Extension Development Host]` will open with the Stride extension loaded.
+5. Open any `.stride` file in that window to test syntax highlighting, hover, definitions, document outline, completions, and diagnostics.
+
+### 2. Live Reloading
+- Run TypeScript watch mode in your terminal:
+  ```powershell
+  npm run watch
+  ```
+- After making code changes in `src/extension.ts`, simply press **`Ctrl+R`** inside the `[Extension Development Host]` window (or execute `Developer: Reload Window` from the Command Palette `Ctrl+Shift+P`) to reload the updated extension instantly.
+
 ---
 
 ## Packaging and Offline Installation
