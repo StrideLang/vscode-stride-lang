@@ -47,9 +47,41 @@ This outputs `stride-lsp.exe` directly into `server/bin/`, where the VS Code ext
 
 ---
 
+---
+
+## Packaging and Offline Installation
+
+You can package and install the extension without publishing to the VS Code Marketplace.
+
+### 1. Build and Package `.vsix`
+```powershell
+# Install dependencies & compile TypeScript
+npm install
+npm run compile
+
+# Package into a standalone .vsix installer
+npx @vscode/vsce package
+```
+This generates `stride-language-0.1.0.vsix` in the project root.
+
+### 2. Installing the `.vsix`
+
+- **Via Command Line**:
+  ```powershell
+  code --install-extension stride-language-0.1.0.vsix
+  ```
+
+- **Via VS Code UI**:
+  1. Open the Extensions view (`Ctrl+Shift+X`).
+  2. Click the **`...`** (More Actions) menu in the top right of the Extensions panel.
+  3. Select **Install from VSIX...** and choose `stride-language-0.1.0.vsix`.
+
+---
+
 ## Extension Settings
 
 - `stride.server.path`: Optional override for the path to the `stride-lsp.exe` binary.
+- `stride.strideroot`: Path to the Stride root directory containing standard library definitions (overrides environment variable and bundled fallback library).
 - `stride.includePaths`: Additional search paths for Stride system and domain definitions.
 - `stride.trace.server`: Tracing level for LSP communications (`off`, `messages`, `verbose`).
 
