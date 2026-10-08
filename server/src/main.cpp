@@ -485,11 +485,68 @@ void analyzeDocument(DocumentState &doc) {
     publishDiagnostics(doc.uri, doc.errors, doc.text);
 }
 
+bool isPositionInStringOrComment(const std::string &text, int targetLine, int targetChar) {
+    int curLine = 0;
+    int curChar = 0;
+    bool inComment = false;
+    char inString = 0;
+    bool escape = false;
+
+    for (size_t i = 0; i < text.size(); i++) {
+        char c = text[i];
+        if (curLine == targetLine && curChar == targetChar) {
+            return (inComment || inString != 0 || c == '"' || c == '\'' || c == '#');
+        }
+
+        if (inComment) {
+            if (c == '\n') {
+                inComment = false;
+                curLine++;
+                curChar = 0;
+            } else {
+                curChar++;
+            }
+            continue;
+        }
+
+        if (inString != 0) {
+            if (escape) {
+                escape = false;
+            } else if (c == '\\') {
+                escape = true;
+            } else if (c == inString) {
+                inString = 0;
+            }
+            if (c == '\n') {
+                curLine++;
+                curChar = 0;
+            } else {
+                curChar++;
+            }
+            continue;
+        }
+
+        if (c == '#') {
+            inComment = true;
+            curChar++;
+        } else if (c == '"' || c == '\'') {
+            inString = c;
+            curChar++;
+        } else if (c == '\n') {
+            curLine++;
+            curChar = 0;
+        } else {
+            curChar++;
+        }
+    }
+    return (inComment || inString != 0);
+}
+
 void handleHover(const std::string &id, const std::string &uri, int line, int character) {
     auto it = openDocuments.find(uri);
     std::string hoverText = "";
 
-    if (it != openDocuments.end()) {
+    if (it != openDocuments.end() && !isPositionInStringOrComment(it->second.text, line, character)) {
         std::string token = getWordAtPosition(it->second.text, line, character);
         if (!token.empty()) {
             if (token == "_IntType") {

@@ -177,13 +177,105 @@ const BUILTIN_SCALARS: Record<string, string> = {
     '_Signal': '**Built-in Type**: `_Signal` — *Base abstract signal representation in Stride.*'
 };
 
-function extractBraceBlock(text: string, startIndex: number): { body: string; endIndex: number } | null {
+function maskCommentsAndStrings(text: string): string {
+    const chars = text.split('');
+    let inString: false | '"' | "'" = false;
+    let inComment = false;
+    let escape = false;
+
+    for (let i = 0; i < chars.length; i++) {
+        const c = chars[i];
+
+        if (inComment) {
+            if (c === '\n' || c === '\r') {
+                inComment = false;
+            } else {
+                chars[i] = ' ';
+            }
+            continue;
+        }
+
+        if (inString !== false) {
+            if (escape) {
+                escape = false;
+                chars[i] = (c === '\n' || c === '\r') ? c : ' ';
+            } else if (c === '\\') {
+                escape = true;
+                chars[i] = ' ';
+            } else if (c === inString) {
+                inString = false;
+                chars[i] = ' ';
+            } else {
+                chars[i] = (c === '\n' || c === '\r') ? c : ' ';
+            }
+            continue;
+        }
+
+        if (c === '#') {
+            inComment = true;
+            chars[i] = ' ';
+        } else if (c === '"' || c === "'") {
+            inString = c;
+            chars[i] = ' ';
+        }
+    }
+
+    return chars.join('');
+}
+
+function isOffsetInCommentOrString(text: string, offset: number): boolean {
+    let inString: false | '"' | "'" = false;
+    let inComment = false;
+    let escape = false;
+
+    const limit = Math.min(offset, text.length);
+    for (let i = 0; i < limit; i++) {
+        const c = text[i];
+
+        if (inComment) {
+            if (c === '\n' || c === '\r') {
+                inComment = false;
+            }
+            continue;
+        }
+
+        if (inString !== false) {
+            if (escape) {
+                escape = false;
+            } else if (c === '\\') {
+                escape = true;
+            } else if (c === inString) {
+                inString = false;
+            }
+            continue;
+        }
+
+        if (c === '#') {
+            inComment = true;
+        } else if (c === '"' || c === "'") {
+            inString = c;
+        }
+    }
+
+    if (inComment || inString !== false) {
+        return true;
+    }
+
+    if (offset < text.length && (text[offset] === '"' || text[offset] === "'" || text[offset] === '#')) {
+        return true;
+    }
+
+    return false;
+}
+
+function extractBraceBlock(text: string, startIndex: number, maskedText?: string): { body: string; endIndex: number } | null {
+    const scanText = maskedText || maskCommentsAndStrings(text);
     let braceCount = 0;
     let inBrace = false;
     let bodyStart = -1;
 
-    for (let i = startIndex; i < text.length; i++) {
-        const char = text[i];
+    for (let i = startIndex; i < scanText.length; i++) {
+        const char = scanText[i];
         if (char === '{') {
             if (!inBrace) {
                 inBrace = true;
@@ -200,13 +292,14 @@ function extractBraceBlock(text: string, startIndex: number): { body: string; en
     return null;
 }
 
-function extractSquareBracketBlock(text: string, startIndex: number): { body: string; endIndex: number } | null {
+function extractSquareBracketBlock(text: string, startIndex: number, maskedText?: string): { body: string; endIndex: number } | null {
+    const scanText = maskedText || maskCommentsAndStrings(text);
     let bracketCount = 0;
     let inBracket = false;
     let bodyStart = -1;
 
-    for (let i = startIndex; i < text.length; i++) {
-        const char = text[i];
+    for (let i = startIndex; i < scanText.length; i++) {
+        const char = scanText[i];
         if (char === '[') {
             if (!inBracket) {
                 inBracket = true;
@@ -265,26 +358,26 @@ interface ScopeContext {
 }
 
 function stripComments(text: string): string {
-    return text.replace(/#[^\r\n]*/g, match => ' '.repeat(match.length));
+    return maskCommentsAndStrings(text);
 }
 
 function parseDeclarationsFromBlock(blockBody: string, baseLine: number, filePath: string): ScopeDeclaration[] {
-    const cleanBody = stripComments(blockBody);
+    const maskedBody = maskCommentsAndStrings(blockBody);
     const decls: ScopeDeclaration[] = [];
     const declHeaderRegex = /\b([_a-zA-Z0-9]+)(?:\s+([_a-zA-Z0-9]+))?\s*(?=\{)/g;
     let match;
 
-    while ((match = declHeaderRegex.exec(cleanBody)) !== null) {
+    while ((match = declHeaderRegex.exec(maskedBody)) !== null) {
         const kind = match[1];
         let name = match[2];
         const headerEnd = match.index + match[0].length;
-        const block = extractBraceBlock(cleanBody, headerEnd);
+        const block = extractBraceBlock(blockBody, headerEnd, maskedBody);
         if (!block) continue;
         const pBody = block.body;
 
         let dLine = baseLine;
         for (let i = 0; i < match.index; i++) {
-            if (cleanBody[i] === '\n') dLine++;
+            if (blockBody[i] === '\n') dLine++;
         }
 
         const nameMatch = /name\s*:\s*(?:["']([^"']+)["']|([_a-zA-Z0-9]+))/.exec(pBody);
@@ -321,15 +414,15 @@ function parseDeclarationsFromBlock(blockBody: string, baseLine: number, filePat
 }
 
 function parseScopeTree(text: string, filePath: string): ScopeContext {
-    const cleanText = stripComments(text);
-    const lines = cleanText.split(/\r?\n/);
+    const maskedText = maskCommentsAndStrings(text);
+    const lines = text.split(/\r?\n/);
     const rootScope: ScopeContext = {
         name: '<root>',
         kind: 'root',
         startLine: 1,
         endLine: lines.length,
         startOffset: 0,
-        endOffset: cleanText.length,
+        endOffset: text.length,
         declarations: new Map(),
         ports: new Map(),
         boundPorts: new Map(),
@@ -342,17 +435,17 @@ function parseScopeTree(text: string, filePath: string): ScopeContext {
 
     const discoveredScopes: ScopeContext[] = [];
 
-    while ((match = blockHeaderRegex.exec(cleanText)) !== null) {
+    while ((match = blockHeaderRegex.exec(maskedText)) !== null) {
         const kind = match[1];
         let name = match[2];
         const headerEnd = match.index + match[0].length;
-        const block = extractBraceBlock(cleanText, headerEnd);
+        const block = extractBraceBlock(text, headerEnd, maskedText);
         if (!block) continue;
 
         const startOffset = match.index;
         const endOffset = headerEnd + block.body.length + 1; // including '}'
-        const startLine = getLineNumber(cleanText, startOffset);
-        const endLine = getLineNumber(cleanText, endOffset);
+        const startLine = getLineNumber(text, startOffset);
+        const endLine = getLineNumber(text, endOffset);
 
         if (!name) {
             const nameMatch = /name\s*:\s*(?:["']([^"']+)["']|([_a-zA-Z0-9]+))/.exec(block.body);
@@ -565,17 +658,18 @@ function formatClickableLink(filePath: string, line: number = 1): string {
 }
 
 function parsePortsFromBlock(blockBody: string, baseLine: number = 1): PortInfo[] {
+    const maskedBody = maskCommentsAndStrings(blockBody);
     const ports: PortInfo[] = [];
     const portHeaderRegex = /\b(mainInputPort|mainOutputPort|propertyInputPort|propertyOutputPort|port)\s+([_a-zA-Z0-9]+)\s*(?=\{)/g;
     let match;
 
-    while ((match = portHeaderRegex.exec(blockBody)) !== null) {
+    while ((match = portHeaderRegex.exec(maskedBody)) !== null) {
         const portType = match[1];
         const portName = match[2];
         const headerEnd = match.index + match[0].length;
-        const block = extractBraceBlock(blockBody, headerEnd);
+        const block = extractBraceBlock(blockBody, headerEnd, maskedBody);
         if (!block) continue;
-        const pBody = block.body.replace(/#[^\n\r]*/g, '');
+        const pBody = block.body;
 
         let pLine = baseLine;
         for (let i = 0; i < match.index; i++) {
@@ -603,22 +697,22 @@ function parsePortsFromBlock(blockBody: string, baseLine: number = 1): PortInfo[
 }
 
 function parseLibrarySymbols(text: string, filePath: string): LibrarySymbol[] {
-    const cleanText = stripComments(text);
+    const maskedText = maskCommentsAndStrings(text);
     const symbols: LibrarySymbol[] = [];
     const declHeaderRegex = /\b(_domainDefinition|gameDefinition|module|reaction|loop|state|transition|platformModule|platformFunction|resource|domainResource|_frameworkDescription|alias|signal|switch|trigger)\s+([_a-zA-Z0-9]+)(?:\[[^\]]*\])?(?:@\s*[_a-zA-Z0-9]+)?\s*(?=\{)/g;
     let match;
 
-    while ((match = declHeaderRegex.exec(cleanText)) !== null) {
+    while ((match = declHeaderRegex.exec(maskedText)) !== null) {
         const kind = match[1];
         const name = match[2];
         const headerEnd = match.index + match[0].length;
-        const block = extractBraceBlock(cleanText, headerEnd);
+        const block = extractBraceBlock(text, headerEnd, maskedText);
         if (!block) continue;
         const body = block.body;
 
         let line = 1;
         for (let i = 0; i < match.index; i++) {
-            if (cleanText[i] === '\n') line++;
+            if (text[i] === '\n') line++;
         }
 
         const metaMatch = /meta\s*:\s*['"]([^'"]+)['"]/.exec(body);
@@ -679,22 +773,23 @@ function parseLibrarySymbols(text: string, filePath: string): LibrarySymbol[] {
 }
 
 function parseTypesFromText(text: string, filePath?: string): TypeInfo[] {
-    const cleanText = stripComments(text);
+    const maskedText = maskCommentsAndStrings(text);
     const types: TypeInfo[] = [];
     const typeHeaderRegex = /\btype\s+(_*[a-zA-Z0-9_]+)\s*(?=\{)/g;
     let match;
 
-    while ((match = typeHeaderRegex.exec(cleanText)) !== null) {
+    while ((match = typeHeaderRegex.exec(maskedText)) !== null) {
         const typeDeclName = match[1];
         const headerEnd = match.index + match[0].length;
-        const block = extractBraceBlock(cleanText, headerEnd);
+        const block = extractBraceBlock(text, headerEnd, maskedText);
         if (!block) continue;
 
         const body = block.body;
+        const maskedBody = maskCommentsAndStrings(body);
 
         let line = 1;
         for (let i = 0; i < match.index; i++) {
-            if (cleanText[i] === '\n') line++;
+            if (text[i] === '\n') line++;
         }
 
         const typeNameMatch = /typeName\s*:\s*(?:["']([^"']+)["']|([_a-zA-Z0-9]+))/.exec(body);
@@ -716,10 +811,10 @@ function parseTypesFromText(text: string, filePath?: string): TypeInfo[] {
         const properties: PropertyInfo[] = [];
         const propHeaderRegex = /typeProperty\s*(?:([_a-zA-Z0-9]+)\s*)?(?=\{)/g;
         let pMatch;
-        while ((pMatch = propHeaderRegex.exec(body)) !== null) {
+        while ((pMatch = propHeaderRegex.exec(maskedBody)) !== null) {
             const explicitName = pMatch[1];
             const pHeaderEnd = pMatch.index + pMatch[0].length;
-            const pBlock = extractBraceBlock(body, pHeaderEnd);
+            const pBlock = extractBraceBlock(body, pHeaderEnd, maskedBody);
             if (!pBlock) continue;
             const pBody = pBlock.body;
 
@@ -1043,21 +1138,21 @@ interface EnclosingDecl {
 }
 
 function findEnclosingDeclarations(text: string): EnclosingDecl[] {
-    const clean = stripComments(text);
+    const maskedText = maskCommentsAndStrings(text);
     const decls: EnclosingDecl[] = [];
     const declHeaderRegex = /\b([_a-zA-Z0-9]+)\s+([_a-zA-Z0-9]+)\s*(?=\{)/g;
     let match;
 
-    while ((match = declHeaderRegex.exec(clean)) !== null) {
+    while ((match = declHeaderRegex.exec(maskedText)) !== null) {
         const kind = match[1];
         const name = match[2];
         const headerEnd = match.index + match[0].length;
-        const block = extractBraceBlock(clean, headerEnd);
+        const block = extractBraceBlock(text, headerEnd, maskedText);
         if (!block) continue;
 
         let line = 1;
         for (let i = 0; i < match.index; i++) {
-            if (clean[i] === '\n') line++;
+            if (text[i] === '\n') line++;
         }
 
         decls.push({
@@ -1370,6 +1465,11 @@ function registerFallbackProviders(context: ExtensionContext) {
 
     const hoverProvider: HoverProvider = {
         provideHover(document: TextDocument, position: Position): Hover | undefined {
+            const charOffset = document.offsetAt(position);
+            if (isOffsetInCommentOrString(document.getText(), charOffset)) {
+                return undefined;
+            }
+
             const wordRange = document.getWordRangeAtPosition(position, /[_@a-zA-Z0-9]+/);
             if (!wordRange) return undefined;
             const word = document.getText(wordRange);
@@ -1378,7 +1478,6 @@ function registerFallbackProviders(context: ExtensionContext) {
             const lineText = document.lineAt(position.line).text;
             const afterWord = lineText.substring(wordRange.end.character);
             const isFollowedByColon = /^\s*:/.test(afterWord);
-            const charOffset = document.offsetAt(position);
             const enclosingDecl = getCachedInnermostEnclosingDeclaration(document, charOffset);
 
             // 1. If followed by a colon, resolve property FIRST
@@ -1491,6 +1590,11 @@ function registerFallbackProviders(context: ExtensionContext) {
 
     const definitionProvider: DefinitionProvider = {
         provideDefinition(document: TextDocument, position: Position): Location | undefined {
+            const charOffset = document.offsetAt(position);
+            if (isOffsetInCommentOrString(document.getText(), charOffset)) {
+                return undefined;
+            }
+
             const wordRange = document.getWordRangeAtPosition(position, /[_@a-zA-Z0-9]+/);
             if (!wordRange) return undefined;
             const word = document.getText(wordRange);
@@ -1499,7 +1603,6 @@ function registerFallbackProviders(context: ExtensionContext) {
             const lineText = document.lineAt(position.line).text;
             const afterWord = lineText.substring(wordRange.end.character);
             const isFollowedByColon = /^\s*:/.test(afterWord);
-            const charOffset = document.offsetAt(position);
             const enclosingDecl = getCachedInnermostEnclosingDeclaration(document, charOffset);
 
             // 1. If followed by a colon, jump to property declaration
@@ -1543,7 +1646,12 @@ function registerFallbackProviders(context: ExtensionContext) {
     };
 
     const completionProvider: CompletionItemProvider = {
-        provideCompletionItems(document: TextDocument): CompletionItem[] {
+        provideCompletionItems(document: TextDocument, position: Position): CompletionItem[] | undefined {
+            const charOffset = document.offsetAt(position);
+            if (isOffsetInCommentOrString(document.getText(), charOffset)) {
+                return undefined;
+            }
+
             const items: CompletionItem[] = [];
             const allTypes = getAllTypes(document);
             const allSymbols = getAllLibrarySymbols(document);
@@ -1594,23 +1702,22 @@ function registerFallbackProviders(context: ExtensionContext) {
     function validateDocument(document: TextDocument) {
         if (document.languageId !== 'stride') return;
         const text = document.getText();
+        const maskedText = maskCommentsAndStrings(text);
         const lines = text.split(/\r?\n/);
         const diagnostics: Diagnostic[] = [];
 
         const allTypes = getAllTypes(document);
         const { scopeTree: rootScope } = getCachedDocData(document);
 
-        // 1. Check Unbalanced Braces / Brackets
+        // 1. Check Unbalanced Braces / Brackets on MASKED text (ignores strings and comments)
         let openBraces = 0;
         let openBrackets = 0;
-        for (let i = 0; i < lines.length; i++) {
-            const line = lines[i].replace(/#[^\r\n]*/g, '');
-            for (let j = 0; j < line.length; j++) {
-                if (line[j] === '{') openBraces++;
-                else if (line[j] === '}') openBraces--;
-                else if (line[j] === '[') openBrackets++;
-                else if (line[j] === ']') openBrackets--;
-            }
+        for (let i = 0; i < maskedText.length; i++) {
+            const ch = maskedText[i];
+            if (ch === '{') openBraces++;
+            else if (ch === '}') openBraces--;
+            else if (ch === '[') openBrackets++;
+            else if (ch === ']') openBrackets--;
         }
         if (openBraces !== 0) {
             const lastLine = Math.max(0, lines.length - 1);
@@ -1629,12 +1736,12 @@ function registerFallbackProviders(context: ExtensionContext) {
             ));
         }
 
-        // 2. Validate Declarations (Unknown Type, Invalid Properties)
+        // 2. Validate Declarations (Unknown Type, Invalid Properties) on MASKED text
         const declHeaderRegex = /\b([_a-zA-Z0-9]+)\s+([_a-zA-Z0-9]+)\s*(?=\{)/g;
         let match;
         const ignoredKeywords = new Set(['import', 'use', 'version', 'streamRate']);
 
-        while ((match = declHeaderRegex.exec(text)) !== null) {
+        while ((match = declHeaderRegex.exec(maskedText)) !== null) {
             const kind = match[1];
             const name = match[2];
             if (ignoredKeywords.has(kind)) continue;
@@ -1657,17 +1764,17 @@ function registerFallbackProviders(context: ExtensionContext) {
 
             // Validate Properties inside declaration block dynamically from schema
             const headerEnd = match.index + match[0].length;
-            const block = extractBraceBlock(text, headerEnd);
+            const block = extractBraceBlock(text, headerEnd, maskedText);
             if (block && isKnownType) {
                 const allowedProps = resolveAllPropertiesForType(kind, allTypes);
+                const maskedBodyStr = maskCommentsAndStrings(block.body);
 
                 // Scan only top-level properties of this block (depth 0 of braces & brackets)
                 const propRegex = /\b([_a-zA-Z0-9]+)\s*:/g;
                 let depth = 0;
                 let bIndex = 0;
-                const bodyStr = block.body;
-                while (bIndex < bodyStr.length) {
-                    const ch = bodyStr[bIndex];
+                while (bIndex < maskedBodyStr.length) {
+                    const ch = maskedBodyStr[bIndex];
                     if (ch === '{' || ch === '[') {
                         depth++;
                         bIndex++;
@@ -1680,7 +1787,7 @@ function registerFallbackProviders(context: ExtensionContext) {
                     }
                     if (depth === 0) {
                         propRegex.lastIndex = bIndex;
-                        const pMatch = propRegex.exec(bodyStr);
+                        const pMatch = propRegex.exec(maskedBodyStr);
                         if (pMatch && pMatch.index === bIndex) {
                             const propName = pMatch[1];
                             const globalChar = headerEnd + 1 + pMatch.index;
@@ -1728,19 +1835,20 @@ function registerFallbackProviders(context: ExtensionContext) {
         }
         checkDuplicateScope(rootScope);
 
-        // 4. Validate Undeclared Symbols in Streams
+        // 4. Validate Undeclared Symbols in Streams (ignoring string literals and comments)
         const streamBlockRegex = /\bstreams\s*:\s*\[/g;
         let sMatch;
-        while ((sMatch = streamBlockRegex.exec(text)) !== null) {
+        while ((sMatch = streamBlockRegex.exec(maskedText)) !== null) {
             const sStart = sMatch.index + sMatch[0].length - 1;
-            const sBlock = extractSquareBracketBlock(text, sStart);
+            const sBlock = extractSquareBracketBlock(text, sStart, maskedText);
             if (!sBlock) continue;
             const sLine = getLineNumber(text, sMatch.index);
             const scopeStack = buildScopeStack(rootScope, sLine);
+            const maskedStreamBody = maskCommentsAndStrings(sBlock.body);
 
             const streamStmtRegex = /([^;]+);/g;
             let stmtMatch;
-            while ((stmtMatch = streamStmtRegex.exec(sBlock.body)) !== null) {
+            while ((stmtMatch = streamStmtRegex.exec(maskedStreamBody)) !== null) {
                 const stmtText = stmtMatch[1];
                 const tokenRegex = /\b([_a-zA-Z0-9]+)\b/g;
                 let tokMatch;
