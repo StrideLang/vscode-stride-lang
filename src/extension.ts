@@ -457,6 +457,25 @@ function findDeclarationInScopeStack(name: string, scopeStack: ScopeContext[]): 
     return undefined;
 }
 
+let cachedLibraryFiles: string[] | undefined = undefined;
+let cachedLibraryTypes: Map<string, TypeInfo> | undefined = undefined;
+let cachedLibrarySymbols: Map<string, LibrarySymbol> | undefined = undefined;
+
+function invalidateLibraryCache() {
+    cachedLibraryFiles = undefined;
+    cachedLibraryTypes = undefined;
+    cachedLibrarySymbols = undefined;
+    docCache.clear();
+}
+
+function getLibraryFiles(): string[] {
+    if (cachedLibraryFiles) {
+        return cachedLibraryFiles;
+    }
+    cachedLibraryFiles = findKnownLibraryFiles();
+    return cachedLibraryFiles;
+}
+
 function findKnownLibraryFiles(): string[] {
     const files: string[] = [];
     const rootDirs: string[] = [];
@@ -753,10 +772,13 @@ function parseTypesFromText(text: string, filePath?: string): TypeInfo[] {
     return types;
 }
 
-function getAllTypes(document: TextDocument): Map<string, TypeInfo> {
+function getLibraryTypes(): Map<string, TypeInfo> {
+    if (cachedLibraryTypes) {
+        return cachedLibraryTypes;
+    }
     const typeMap = new Map<string, TypeInfo>();
 
-    for (const schemaPath of findKnownLibraryFiles()) {
+    for (const schemaPath of getLibraryFiles()) {
         try {
             const content = fs.readFileSync(schemaPath, 'utf8');
             const parsed = parseTypesFromText(content, schemaPath);
@@ -785,6 +807,20 @@ function getAllTypes(document: TextDocument): Map<string, TypeInfo> {
             }
         } catch (e) {}
     }
+
+    for (const [alias, target] of Object.entries(TYPE_ALIASES)) {
+        if (typeMap.has(target)) {
+            typeMap.set(alias, typeMap.get(target)!);
+        }
+    }
+
+    cachedLibraryTypes = typeMap;
+    return typeMap;
+}
+
+function getAllTypes(document: TextDocument): Map<string, TypeInfo> {
+    const baseTypes = getLibraryTypes();
+    const typeMap = new Map<string, TypeInfo>(baseTypes);
 
     try {
         const docParsed = parseTypesFromText(document.getText(), document.uri.fsPath);
@@ -837,10 +873,13 @@ function resolveAllPropertiesForType(kind: string, allTypes: Map<string, TypeInf
     return propMap;
 }
 
-function getAllLibrarySymbols(document: TextDocument): Map<string, LibrarySymbol> {
+function getLibrarySymbols(): Map<string, LibrarySymbol> {
+    if (cachedLibrarySymbols) {
+        return cachedLibrarySymbols;
+    }
     const symbolMap = new Map<string, LibrarySymbol>();
 
-    for (const libPath of findKnownLibraryFiles()) {
+    for (const libPath of getLibraryFiles()) {
         try {
             const content = fs.readFileSync(libPath, 'utf8');
             const parsed = parseLibrarySymbols(content, libPath);
@@ -853,6 +892,14 @@ function getAllLibrarySymbols(document: TextDocument): Map<string, LibrarySymbol
             }
         } catch (e) {}
     }
+
+    cachedLibrarySymbols = symbolMap;
+    return symbolMap;
+}
+
+function getAllLibrarySymbols(document: TextDocument): Map<string, LibrarySymbol> {
+    const baseSymbols = getLibrarySymbols();
+    const symbolMap = new Map<string, LibrarySymbol>(baseSymbols);
 
     try {
         const docParsed = parseLibrarySymbols(document.getText(), document.uri.fsPath);
@@ -1022,11 +1069,37 @@ function findEnclosingDeclarations(text: string): EnclosingDecl[] {
     return decls;
 }
 
-function getInnermostEnclosingDeclaration(text: string, offset: number): EnclosingDecl | undefined {
-    const allDecls = findEnclosingDeclarations(text);
+interface DocCacheEntry {
+    version: number;
+    scopeTree: ScopeContext;
+    enclosingDecls: EnclosingDecl[];
+}
+
+const docCache = new Map<string, DocCacheEntry>();
+
+function getCachedDocData(document: TextDocument): DocCacheEntry {
+    const key = document.uri.toString();
+    const cached = docCache.get(key);
+    if (cached && cached.version === document.version) {
+        return cached;
+    }
+    const text = document.getText();
+    const scopeTree = parseScopeTree(text, document.uri.fsPath);
+    const enclosingDecls = findEnclosingDeclarations(text);
+    const entry: DocCacheEntry = {
+        version: document.version,
+        scopeTree,
+        enclosingDecls
+    };
+    docCache.set(key, entry);
+    return entry;
+}
+
+function getCachedInnermostEnclosingDeclaration(document: TextDocument, offset: number): EnclosingDecl | undefined {
+    const { enclosingDecls } = getCachedDocData(document);
     let best: EnclosingDecl | undefined = undefined;
 
-    for (const d of allDecls) {
+    for (const d of enclosingDecls) {
         if (offset >= d.start && offset <= d.end) {
             if (!best || (d.end - d.start < best.end - best.start)) {
                 best = d;
@@ -1229,8 +1302,7 @@ function registerFallbackProviders(context: ExtensionContext) {
     extensionContext = context;
     const symbolProvider: DocumentSymbolProvider = {
         provideDocumentSymbols(document: TextDocument): DocumentSymbol[] {
-            const text = document.getText();
-            const rootScope = parseScopeTree(text, document.uri.fsPath);
+            const { scopeTree: rootScope } = getCachedDocData(document);
 
             function getSymbolKind(kindStr: string): SymbolKind {
                 if (kindStr === 'module' || kindStr === 'reaction' || kindStr === 'loop') {
@@ -1302,7 +1374,7 @@ function registerFallbackProviders(context: ExtensionContext) {
             const afterWord = lineText.substring(wordRange.end.character);
             const isFollowedByColon = /^\s*:/.test(afterWord);
             const charOffset = document.offsetAt(position);
-            const enclosingDecl = getInnermostEnclosingDeclaration(document.getText(), charOffset);
+            const enclosingDecl = getCachedInnermostEnclosingDeclaration(document, charOffset);
 
             // 1. If followed by a colon, resolve property FIRST
             if (isFollowedByColon) {
@@ -1334,7 +1406,7 @@ function registerFallbackProviders(context: ExtensionContext) {
             // 5. Check for Import statements (e.g. import GameFunctions -> link to GameFunctions.stride)
             const importMatch = /^\s*import\s+([_a-zA-Z0-9]+)/.exec(lineText);
             if (importMatch && importMatch[1] === word) {
-                for (const libPath of findKnownLibraryFiles()) {
+                for (const libPath of getLibraryFiles()) {
                     if (path.basename(libPath, '.stride') === word || path.basename(libPath) === word) {
                         const content = fs.readFileSync(libPath, 'utf8');
                         const decls = parseLibrarySymbols(content, libPath);
@@ -1354,7 +1426,7 @@ function registerFallbackProviders(context: ExtensionContext) {
             }
 
             // 6. Lexical Scoping & ScopeStack Resolution for local signals, switches, blocks, ports, and variables
-            const rootScope = parseScopeTree(document.getText(), document.uri.fsPath);
+            const { scopeTree: rootScope } = getCachedDocData(document);
             const scopeStack = buildScopeStack(rootScope, position.line + 1);
             const decl = findDeclarationInScopeStack(word, scopeStack);
 
@@ -1423,7 +1495,7 @@ function registerFallbackProviders(context: ExtensionContext) {
             const afterWord = lineText.substring(wordRange.end.character);
             const isFollowedByColon = /^\s*:/.test(afterWord);
             const charOffset = document.offsetAt(position);
-            const enclosingDecl = getInnermostEnclosingDeclaration(document.getText(), charOffset);
+            const enclosingDecl = getCachedInnermostEnclosingDeclaration(document, charOffset);
 
             // 1. If followed by a colon, jump to property declaration
             if (isFollowedByColon) {
@@ -1434,7 +1506,7 @@ function registerFallbackProviders(context: ExtensionContext) {
             }
 
             // 2. Local ScopeStack declarations
-            const rootScope = parseScopeTree(document.getText(), document.uri.fsPath);
+            const { scopeTree: rootScope } = getCachedDocData(document);
             const scopeStack = buildScopeStack(rootScope, position.line + 1);
             const decl = findDeclarationInScopeStack(word, scopeStack);
             if (decl) {
@@ -1521,7 +1593,7 @@ function registerFallbackProviders(context: ExtensionContext) {
         const diagnostics: Diagnostic[] = [];
 
         const allTypes = getAllTypes(document);
-        const rootScope = parseScopeTree(text, document.uri.fsPath);
+        const { scopeTree: rootScope } = getCachedDocData(document);
 
         // 1. Check Unbalanced Braces / Brackets
         let openBraces = 0;
@@ -1693,17 +1765,55 @@ function registerFallbackProviders(context: ExtensionContext) {
         diagnosticCollection.set(document.uri, diagnostics);
     }
 
+    const validationTimers = new Map<string, NodeJS.Timeout>();
+
+    function scheduleValidation(document: TextDocument) {
+        if (document.languageId !== 'stride') return;
+        const key = document.uri.toString();
+        const existing = validationTimers.get(key);
+        if (existing) {
+            clearTimeout(existing);
+        }
+        const timer = setTimeout(() => {
+            validationTimers.delete(key);
+            validateDocument(document);
+        }, 250);
+        validationTimers.set(key, timer);
+    }
+
     // Validate active documents
     for (const doc of workspace.textDocuments) {
         validateDocument(doc);
     }
 
+    const fileWatcher = workspace.createFileSystemWatcher('**/*.stride');
+    fileWatcher.onDidCreate(() => invalidateLibraryCache());
+    fileWatcher.onDidChange(() => invalidateLibraryCache());
+    fileWatcher.onDidDelete(() => invalidateLibraryCache());
+
+    const configWatcher = workspace.onDidChangeConfiguration(e => {
+        if (e.affectsConfiguration('stride')) {
+            invalidateLibraryCache();
+        }
+    });
+
     context.subscriptions.push(
         diagnosticCollection,
+        fileWatcher,
+        configWatcher,
         workspace.onDidOpenTextDocument(doc => validateDocument(doc)),
-        workspace.onDidChangeTextDocument(e => validateDocument(e.document)),
+        workspace.onDidChangeTextDocument(e => scheduleValidation(e.document)),
         workspace.onDidSaveTextDocument(doc => validateDocument(doc)),
-        workspace.onDidCloseTextDocument(doc => diagnosticCollection.delete(doc.uri)),
+        workspace.onDidCloseTextDocument(doc => {
+            const key = doc.uri.toString();
+            const timer = validationTimers.get(key);
+            if (timer) {
+                clearTimeout(timer);
+                validationTimers.delete(key);
+            }
+            docCache.delete(key);
+            diagnosticCollection.delete(doc.uri);
+        }),
         languages.registerDocumentSymbolProvider({ scheme: 'file', language: 'stride' }, symbolProvider),
         languages.registerHoverProvider({ scheme: 'file', language: 'stride' }, hoverProvider),
         languages.registerDefinitionProvider({ scheme: 'file', language: 'stride' }, definitionProvider),
