@@ -118,6 +118,9 @@ interface LibrarySymbol {
     outputs?: string[];
     processing?: string;
     targetBlock?: string;
+    arraySpec?: string;
+    generatorVar?: string;
+    generatorRange?: string;
 }
 
 const TYPE_ALIASES: Record<string, string> = {
@@ -341,6 +344,9 @@ interface ScopeDeclaration {
     defaultVal?: string;
     boundBlock?: string;
     associatedPort?: PortInfo;
+    arraySpec?: string;
+    generatorVar?: string;
+    generatorRange?: string;
 }
 
 interface ScopeContext {
@@ -355,6 +361,9 @@ interface ScopeContext {
     boundPorts: Map<string, PortInfo>;
     children: ScopeContext[];
     parent?: ScopeContext;
+    arraySpec?: string;
+    generatorVar?: string;
+    generatorRange?: string;
 }
 
 function stripComments(text: string): string {
@@ -364,12 +373,14 @@ function stripComments(text: string): string {
 function parseDeclarationsFromBlock(blockBody: string, baseLine: number, filePath: string): ScopeDeclaration[] {
     const maskedBody = maskCommentsAndStrings(blockBody);
     const decls: ScopeDeclaration[] = [];
-    const declHeaderRegex = /\b([_a-zA-Z0-9]+)(?:\s+([_a-zA-Z0-9]+))?\s*(?=\{)/g;
+    const declHeaderRegex = /\b([_a-zA-Z0-9]+)(?:\s+([_a-zA-Z0-9]+))?(?:\s*\[((?:[^\[\]]|\[[^\]]*\])*)\])?(?:\s*@\s*([_a-zA-Z0-9]+))?\s*(?=\{)/g;
     let match;
 
     while ((match = declHeaderRegex.exec(maskedBody)) !== null) {
         const kind = match[1];
         let name = match[2];
+        const bracketContent = match[3] ? match[3].trim() : undefined;
+        const annotation = match[4];
         const headerEnd = match.index + match[0].length;
         const block = extractBraceBlock(blockBody, headerEnd, maskedBody);
         if (!block) continue;
@@ -380,6 +391,20 @@ function parseDeclarationsFromBlock(blockBody: string, baseLine: number, filePat
             if (blockBody[i] === '\n') dLine++;
         }
 
+        let generatorVar: string | undefined;
+        let generatorRange: string | undefined;
+        let arraySpec: string | undefined;
+
+        if (bracketContent !== undefined) {
+            const genMatch = /^\s*([_a-zA-Z0-9]+)\s+in\s+(.+)$/.exec(bracketContent);
+            if (genMatch) {
+                generatorVar = genMatch[1];
+                generatorRange = genMatch[2].trim();
+            } else {
+                arraySpec = bracketContent;
+            }
+        }
+
         const nameMatch = /name\s*:\s*(?:["']([^"']+)["']|([_a-zA-Z0-9]+))/.exec(pBody);
         const typeNameMatch = /typeName\s*:\s*(?:["']([^"']+)["']|([_a-zA-Z0-9]+))/.exec(pBody);
         const blockMatch = /block\s*:\s*([_a-zA-Z0-9]+)/.exec(pBody);
@@ -388,7 +413,7 @@ function parseDeclarationsFromBlock(blockBody: string, baseLine: number, filePat
             name = (nameMatch ? (nameMatch[1] || nameMatch[2]) : undefined) ||
                    (typeNameMatch ? (typeNameMatch[1] || typeNameMatch[2]) : undefined) ||
                    (blockMatch ? blockMatch[1] : undefined) ||
-                   `${kind}_line${dLine}`;
+                   (bracketContent ? `[${bracketContent}]` : `${kind}_line${dLine}`);
         }
 
         const metaMatch = /meta\s*:\s*['"]([^'"]+)['"]/.exec(pBody);
@@ -396,17 +421,28 @@ function parseDeclarationsFromBlock(blockBody: string, baseLine: number, filePat
         const domainMatch = /domain\s*:\s*([_a-zA-Z0-9.]+)/.exec(pBody);
         const defMatch = /default\s*:\s*([^;\n\r]+)/.exec(pBody);
 
+        let sig = `${kind} ${name}`;
+        if (bracketContent !== undefined) {
+            sig += `[${bracketContent}]`;
+        }
+        if (annotation) {
+            sig += ` @${annotation}`;
+        }
+
         decls.push({
             name,
             kind,
             line: dLine,
-            signature: `${kind} ${name}`,
+            signature: sig,
             body: pBody,
             meta: metaMatch ? metaMatch[1] : undefined,
             type: typeMatch ? typeMatch[1] : undefined,
             domain: domainMatch ? domainMatch[1] : undefined,
             defaultVal: defMatch ? defMatch[1].trim() : undefined,
-            boundBlock: blockMatch ? blockMatch[1] : undefined
+            boundBlock: blockMatch ? blockMatch[1] : undefined,
+            arraySpec,
+            generatorVar,
+            generatorRange
         });
     }
 
@@ -429,8 +465,8 @@ function parseScopeTree(text: string, filePath: string): ScopeContext {
         children: []
     };
 
-    // Match all block declarations: kind [name] { ... }
-    const blockHeaderRegex = /\b([_a-zA-Z0-9]+)(?:\s+([_a-zA-Z0-9]+))?\s*(?=\{)/g;
+    // Match all block declarations: kind [name] [[array/generator]] [@annotation] { ... }
+    const blockHeaderRegex = /\b([_a-zA-Z0-9]+)(?:\s+([_a-zA-Z0-9]+))?(?:\s*\[((?:[^\[\]]|\[[^\]]*\])*)\])?(?:\s*@\s*([_a-zA-Z0-9]+))?\s*(?=\{)/g;
     let match;
 
     const discoveredScopes: ScopeContext[] = [];
@@ -438,6 +474,8 @@ function parseScopeTree(text: string, filePath: string): ScopeContext {
     while ((match = blockHeaderRegex.exec(maskedText)) !== null) {
         const kind = match[1];
         let name = match[2];
+        const bracketContent = match[3] ? match[3].trim() : undefined;
+        const annotation = match[4];
         const headerEnd = match.index + match[0].length;
         const block = extractBraceBlock(text, headerEnd, maskedText);
         if (!block) continue;
@@ -447,6 +485,20 @@ function parseScopeTree(text: string, filePath: string): ScopeContext {
         const startLine = getLineNumber(text, startOffset);
         const endLine = getLineNumber(text, endOffset);
 
+        let generatorVar: string | undefined;
+        let generatorRange: string | undefined;
+        let arraySpec: string | undefined;
+
+        if (bracketContent !== undefined) {
+            const genMatch = /^\s*([_a-zA-Z0-9]+)\s+in\s+(.+)$/.exec(bracketContent);
+            if (genMatch) {
+                generatorVar = genMatch[1];
+                generatorRange = genMatch[2].trim();
+            } else {
+                arraySpec = bracketContent;
+            }
+        }
+
         if (!name) {
             const nameMatch = /name\s*:\s*(?:["']([^"']+)["']|([_a-zA-Z0-9]+))/.exec(block.body);
             const typeNameMatch = /typeName\s*:\s*(?:["']([^"']+)["']|([_a-zA-Z0-9]+))/.exec(block.body);
@@ -454,7 +506,7 @@ function parseScopeTree(text: string, filePath: string): ScopeContext {
             name = (nameMatch ? (nameMatch[1] || nameMatch[2]) : undefined) ||
                    (typeNameMatch ? (typeNameMatch[1] || typeNameMatch[2]) : undefined) ||
                    (blockMatch ? blockMatch[1] : undefined) ||
-                   `${kind}_line${startLine}`;
+                   (bracketContent ? `[${bracketContent}]` : `${kind}_line${startLine}`);
         }
 
         const scope: ScopeContext = {
@@ -467,8 +519,25 @@ function parseScopeTree(text: string, filePath: string): ScopeContext {
             declarations: new Map(),
             ports: new Map(),
             boundPorts: new Map(),
-            children: []
+            children: [],
+            arraySpec,
+            generatorVar,
+            generatorRange
         };
+
+        // If this declaration has a generator variable (e.g. Index in 0:8), bind it inside this scope
+        if (generatorVar) {
+            scope.declarations.set(generatorVar, {
+                name: generatorVar,
+                kind: 'generator',
+                line: startLine,
+                signature: `${generatorVar} in ${generatorRange}`,
+                type: '_IntType',
+                meta: `Generator iteration variable \`${generatorVar}\` in range \`${generatorRange}\``,
+                generatorVar,
+                generatorRange
+            });
+        }
 
         const ports = parsePortsFromBlock(block.body, startLine);
         for (const p of ports) {
@@ -660,7 +729,7 @@ function formatClickableLink(filePath: string, line: number = 1): string {
 function parsePortsFromBlock(blockBody: string, baseLine: number = 1): PortInfo[] {
     const maskedBody = maskCommentsAndStrings(blockBody);
     const ports: PortInfo[] = [];
-    const portHeaderRegex = /\b(mainInputPort|mainOutputPort|propertyInputPort|propertyOutputPort|port)\s+([_a-zA-Z0-9]+)\s*(?=\{)/g;
+    const portHeaderRegex = /\b(mainInputPort|mainOutputPort|propertyInputPort|propertyOutputPort|port)\s+([_a-zA-Z0-9]+)(?:\s*\[((?:[^\[\]]|\[[^\]]*\])*)\])?\s*(?=\{)/g;
     let match;
 
     while ((match = portHeaderRegex.exec(maskedBody)) !== null) {
@@ -699,12 +768,13 @@ function parsePortsFromBlock(blockBody: string, baseLine: number = 1): PortInfo[
 function parseLibrarySymbols(text: string, filePath: string): LibrarySymbol[] {
     const maskedText = maskCommentsAndStrings(text);
     const symbols: LibrarySymbol[] = [];
-    const declHeaderRegex = /\b(_domainDefinition|gameDefinition|module|reaction|loop|state|transition|platformModule|platformFunction|resource|domainResource|_frameworkDescription|alias|signal|switch|trigger)\s+([_a-zA-Z0-9]+)(?:\[[^\]]*\])?(?:@\s*[_a-zA-Z0-9]+)?\s*(?=\{)/g;
+    const declHeaderRegex = /\b(_domainDefinition|gameDefinition|module|reaction|loop|state|transition|platformModule|platformFunction|resource|domainResource|_frameworkDescription|alias|signal|switch|trigger)\s+([_a-zA-Z0-9]+)(?:\s*\[((?:[^\[\]]|\[[^\]]*\])*)\])?(?:@\s*[_a-zA-Z0-9]+)?\s*(?=\{)/g;
     let match;
 
     while ((match = declHeaderRegex.exec(maskedText)) !== null) {
         const kind = match[1];
         const name = match[2];
+        const bracketContent = match[3] ? match[3].trim() : undefined;
         const headerEnd = match.index + match[0].length;
         const block = extractBraceBlock(text, headerEnd, maskedText);
         if (!block) continue;
@@ -713,6 +783,20 @@ function parseLibrarySymbols(text: string, filePath: string): LibrarySymbol[] {
         let line = 1;
         for (let i = 0; i < match.index; i++) {
             if (text[i] === '\n') line++;
+        }
+
+        let generatorVar: string | undefined;
+        let generatorRange: string | undefined;
+        let arraySpec: string | undefined;
+
+        if (bracketContent !== undefined) {
+            const genMatch = /^\s*([_a-zA-Z0-9]+)\s+in\s+(.+)$/.exec(bracketContent);
+            if (genMatch) {
+                generatorVar = genMatch[1];
+                generatorRange = genMatch[2].trim();
+            } else {
+                arraySpec = bracketContent;
+            }
         }
 
         const metaMatch = /meta\s*:\s*['"]([^'"]+)['"]/.exec(body);
@@ -753,19 +837,27 @@ function parseLibrarySymbols(text: string, filePath: string): LibrarySymbol[] {
         const targetBlockMatch = /block\s*:\s*([_a-zA-Z0-9]+)/.exec(body);
         const targetBlock = targetBlockMatch ? targetBlockMatch[1] : undefined;
 
+        let sig = `${kind} ${name}`;
+        if (bracketContent !== undefined) {
+            sig += `[${bracketContent}]`;
+        }
+
         symbols.push({
             name,
             kind,
             filePath,
             line,
-            signature: `${kind} ${name}`,
+            signature: sig,
             ports: ports.length ? ports : undefined,
             meta,
             inherits: inherits.length ? inherits : undefined,
             inputs: inputs.length ? inputs : undefined,
             outputs: outputs.length ? outputs : undefined,
             processing,
-            targetBlock
+            targetBlock,
+            arraySpec,
+            generatorVar,
+            generatorRange
         });
     }
 
@@ -1135,17 +1227,21 @@ interface EnclosingDecl {
     start: number;
     end: number;
     line: number;
+    arraySpec?: string;
+    generatorVar?: string;
+    generatorRange?: string;
 }
 
 function findEnclosingDeclarations(text: string): EnclosingDecl[] {
     const maskedText = maskCommentsAndStrings(text);
     const decls: EnclosingDecl[] = [];
-    const declHeaderRegex = /\b([_a-zA-Z0-9]+)\s+([_a-zA-Z0-9]+)\s*(?=\{)/g;
+    const declHeaderRegex = /\b([_a-zA-Z0-9]+)(?:\s+([_a-zA-Z0-9]+))?(?:\s*\[((?:[^\[\]]|\[[^\]]*\])*)\])?(?:\s*@\s*([_a-zA-Z0-9]+))?\s*(?=\{)/g;
     let match;
 
     while ((match = declHeaderRegex.exec(maskedText)) !== null) {
         const kind = match[1];
-        const name = match[2];
+        let name = match[2];
+        const bracketContent = match[3] ? match[3].trim() : undefined;
         const headerEnd = match.index + match[0].length;
         const block = extractBraceBlock(text, headerEnd, maskedText);
         if (!block) continue;
@@ -1155,12 +1251,33 @@ function findEnclosingDeclarations(text: string): EnclosingDecl[] {
             if (text[i] === '\n') line++;
         }
 
+        let generatorVar: string | undefined;
+        let generatorRange: string | undefined;
+        let arraySpec: string | undefined;
+
+        if (bracketContent !== undefined) {
+            const genMatch = /^\s*([_a-zA-Z0-9]+)\s+in\s+(.+)$/.exec(bracketContent);
+            if (genMatch) {
+                generatorVar = genMatch[1];
+                generatorRange = genMatch[2].trim();
+            } else {
+                arraySpec = bracketContent;
+            }
+        }
+
+        if (!name) {
+            name = bracketContent ? `[${bracketContent}]` : `${kind}_line${line}`;
+        }
+
         decls.push({
             kind,
             name,
             start: match.index,
             end: block.endIndex,
-            line
+            line,
+            arraySpec,
+            generatorVar,
+            generatorRange
         });
     }
 
@@ -1429,7 +1546,13 @@ function registerFallbackProviders(context: ExtensionContext) {
                         const pos = lineText.indexOf(decl.name);
                         const selRange = new Range(dLine, pos >= 0 ? pos : 0, dLine, pos >= 0 ? pos + decl.name.length : lineText.length);
                         const fullRange = new Range(dLine, 0, dLine, lineText.length);
-                        const sym = new DocumentSymbol(decl.name, decl.kind, getSymbolKind(decl.kind), fullRange, selRange);
+                        let declDetail = decl.kind;
+                        if (decl.generatorVar && decl.generatorRange) {
+                            declDetail = `${decl.generatorVar} in ${decl.generatorRange}`;
+                        } else if (decl.arraySpec) {
+                            declDetail = `${decl.kind} [${decl.arraySpec}]`;
+                        }
+                        const sym = new DocumentSymbol(decl.name, declDetail, getSymbolKind(decl.kind), fullRange, selRange);
                         symbols.push(sym);
                     }
                 }
@@ -1444,9 +1567,16 @@ function registerFallbackProviders(context: ExtensionContext) {
                     const selRange = new Range(sLine, pos >= 0 ? pos : 0, sLine, pos >= 0 ? pos + childScope.name.length : lineText.length);
                     const fullRange = new Range(sLine, 0, eLine, endLineText.length);
 
+                    let detail = childScope.kind;
+                    if (childScope.generatorVar && childScope.generatorRange) {
+                        detail = `${childScope.kind} [${childScope.generatorVar} in ${childScope.generatorRange}]`;
+                    } else if (childScope.arraySpec) {
+                        detail = `${childScope.kind} [${childScope.arraySpec}]`;
+                    }
+
                     const childNode = new DocumentSymbol(
                         childScope.name,
-                        childScope.kind,
+                        detail,
                         getSymbolKind(childScope.kind),
                         fullRange,
                         selRange
@@ -1491,6 +1621,11 @@ function registerFallbackProviders(context: ExtensionContext) {
             // 2. Built-in scalar types
             if (BUILTIN_SCALARS[word]) {
                 return createCompactHover(undefined, BUILTIN_SCALARS[word]);
+            }
+
+            // Keyword: in
+            if (word === 'in') {
+                return createCompactHover('keyword in', '### Keyword: `in`\n\nSpecifies the iteration domain or range in generator array declarations (e.g. `[Index in 0:8]`).');
             }
 
             // 3. Type definitions (only if not followed by colon / not a property key)
@@ -1539,6 +1674,19 @@ function registerFallbackProviders(context: ExtensionContext) {
                 const currentScope = scopeStack[scopeStack.length - 1];
                 if (currentScope && currentScope.kind !== 'root') {
                     body += `📍 **Scope**: \`${currentScope.kind}\` \`${currentScope.name}\`\n\n`;
+                }
+
+                if (decl.kind === 'generator') {
+                    body += `- **Type**: \`${decl.type || '_IntType'}\`\n`;
+                    if (decl.generatorRange) {
+                        body += `- **Range**: \`${decl.generatorRange}\`\n`;
+                    }
+                    if (decl.meta) {
+                        body += `\n---\n*${decl.meta}*\n`;
+                    }
+                    body += `\n---\n`;
+                    body += `📍 **Declared in**: ${formatClickableLink(document.uri.fsPath, decl.line)}\n`;
+                    return createCompactHover(`(generator) ${decl.name} in ${decl.generatorRange || ''}`, body);
                 }
 
                 if (decl.associatedPort) {
@@ -1676,9 +1824,9 @@ function registerFallbackProviders(context: ExtensionContext) {
 
             const keywords = [
                 '_domainDefinition', 'gameDefinition', 'module', 'reaction', 'loop',
-                'state', 'transition', 'platformModule', 'signal', 'switch', 'trigger',
+                'state', 'transition', 'action', 'platformModule', 'signal', 'switch', 'trigger',
                 'mainInputPort', 'mainOutputPort', 'propertyInputPort', 'propertyOutputPort',
-                'import', 'use', 'version', 'streamRate', 'on', 'off', 'none',
+                'import', 'use', 'version', 'streamRate', 'in', 'on', 'off', 'none',
                 '_IntType', '_RealType', '_SwitchType', '_StateType',
                 'default:', 'reset:', 'domain:', 'type:', 'rate:', 'meta:',
                 'framework:', 'inputs:', 'outputs:', 'states:', 'transitions:', 'guard:', 'targetState:',
@@ -1690,6 +1838,22 @@ function registerFallbackProviders(context: ExtensionContext) {
                     const isProp = kw.endsWith(':');
                     const item = new CompletionItem(kw, isProp ? CompletionItemKind.Property : CompletionItemKind.Keyword);
                     items.push(item);
+                }
+            }
+
+            const { scopeTree: rootScope } = getCachedDocData(document);
+            const scopeStack = buildScopeStack(rootScope, position.line + 1);
+            for (const s of scopeStack) {
+                for (const [dName, decl] of s.declarations.entries()) {
+                    if (!items.find(i => i.label === dName)) {
+                        let cKind = CompletionItemKind.Variable;
+                        if (decl.kind === 'module' || decl.kind === 'reaction' || decl.kind === 'loop') cKind = CompletionItemKind.Function;
+                        else if (decl.kind === 'state' || decl.kind === 'transition') cKind = CompletionItemKind.Struct;
+                        const item = new CompletionItem(dName, cKind);
+                        item.detail = `${decl.signature} (${s.name})`;
+                        if (decl.meta) item.documentation = new MarkdownString(decl.meta);
+                        items.push(item);
+                    }
                 }
             }
 
@@ -1737,14 +1901,27 @@ function registerFallbackProviders(context: ExtensionContext) {
         }
 
         // 2. Validate Declarations (Unknown Type, Invalid Properties) on MASKED text
-        const declHeaderRegex = /\b([_a-zA-Z0-9]+)\s+([_a-zA-Z0-9]+)\s*(?=\{)/g;
+        const declHeaderRegex = /\b([_a-zA-Z0-9]+)(?:\s+([_a-zA-Z0-9]+))?(?:\s*\[((?:[^\[\]]|\[[^\]]*\])*)\])?(?:\s*@\s*([_a-zA-Z0-9]+))?\s*(?=\{)/g;
         let match;
         const ignoredKeywords = new Set(['import', 'use', 'version', 'streamRate']);
 
         while ((match = declHeaderRegex.exec(maskedText)) !== null) {
             const kind = match[1];
             const name = match[2];
+            const bracketContent = match[3] ? match[3].trim() : undefined;
             if (ignoredKeywords.has(kind)) continue;
+
+            if (bracketContent !== undefined && bracketContent.includes(' in ')) {
+                const genMatch = /^\s*([_a-zA-Z0-9]+)\s+in\s+(.+)$/.exec(bracketContent);
+                if (!genMatch) {
+                    const lineNum = getLineNumber(text, match.index) - 1;
+                    diagnostics.push(new Diagnostic(
+                        new Range(lineNum, 0, lineNum, lines[lineNum]?.length || 10),
+                        `Syntax Error in generator declaration: expected '[<Variable> in <Range>]'`,
+                        DiagnosticSeverity.Error
+                    ));
+                }
+            }
 
             const lineNum = getLineNumber(text, match.index) - 1;
             const lineText = lines[lineNum] || '';
@@ -2014,3 +2191,6 @@ export function deactivate(): Thenable<void> | undefined {
     }
     return client.stop();
 }
+
+export { parseScopeTree, parseDeclarationsFromBlock, findEnclosingDeclarations, ScopeContext, ScopeDeclaration };
+

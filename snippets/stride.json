@@ -167,5 +167,26 @@
             "switch ${1:Name} { default: ${2:off} }"
         ],
         "description": "Declare a Stride switch"
+    },
+    "Transition Family": {
+        "prefix": "transition-family",
+        "body": [
+            "transition ${1:Place_X}[${2:Index} in ${3:0:8}] {",
+            "\tlabel: \"${4:Place X}\"",
+            "\tguard: ${5:Guard_X[${2:Index}]}",
+            "\tonTransition: [",
+            "\t\t$0",
+            "\t]",
+            "\ttargetState: ${6:TargetState}",
+            "}"
+        ],
+        "description": "Create a generator transition family over an index range"
+    },
+    "Array Signal Declaration": {
+        "prefix": "signal-array",
+        "body": [
+            "signal ${1:Name}[${2:Index} in ${3:0:8}] { domain: ${4:RootDomain}, type: ${5:_RealType} }"
+        ],
+        "description": "Declare a Stride array signal over a range"
     }
 }

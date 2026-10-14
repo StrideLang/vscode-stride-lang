@@ -575,6 +575,8 @@ void handleHover(const std::string &id, const std::string &uri, int line, int ch
                 hoverText = "### Keyword: `state`\n\nDeclares a state machine or an individual state within a state machine hierarchy.";
             } else if (token == "transition") {
                 hoverText = "### Keyword: `transition`\n\nDeclares a state machine transition with target state, guard condition, and action streams.";
+            } else if (token == "in") {
+                hoverText = "### Keyword: `in`\n\nSpecifies the iteration domain or range in generator array declarations (e.g. `[Index in 0:8]`).";
             } else if (token == "platformModule") {
                 hoverText = "### Keyword: `platformModule`\n\nLow-level native code or LLVM IR template binding.";
             } else if (it->second.tree) {
@@ -726,7 +728,7 @@ void handleCompletion(const std::string &id) {
         "state", "transition", "platformModule", "platformFunction", "type",
         "signal", "switch", "trigger", "mainInputPort", "mainOutputPort",
         "propertyInputPort", "propertyOutputPort", "import", "use", "version",
-        "streamRate", "on", "off", "none", "_IntType", "_RealType", "_SwitchType",
+        "streamRate", "in", "on", "off", "none", "_IntType", "_RealType", "_SwitchType",
         "_StateType", "default:", "reset:", "domain:", "type:", "rate:", "meta:",
         "framework:", "inputs:", "outputs:", "states:", "transitions:", "guard:", "targetState:"
     };
