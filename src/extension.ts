@@ -162,8 +162,12 @@ const TYPE_ALIASES: Record<string, string> = {
     '_Base': '_Base',
     'platformModule': '_PlatformModuleType',
     '_PlatformModuleType': '_PlatformModuleType',
+    'platformFunction': '_PlatformFunctionType',
+    '_PlatformFunctionType': '_PlatformFunctionType',
     'gameDefinition': '_GameDefinitionType',
-    '_GameDefinitionType': '_GameDefinitionType'
+    '_GameDefinitionType': '_GameDefinitionType',
+    'action': '_ActionType',
+    '_ActionType': '_ActionType'
 };
 
 const BUILTIN_SCALARS: Record<string, string> = {
@@ -321,6 +325,99 @@ function extractSquareBracketBlock(text: string, startIndex: number, maskedText?
     return null;
 }
 
+function extractTopLevelField(body: string, maskedBody: string, fieldName: string): string | undefined {
+    let depth = 0;
+    const headerRegex = new RegExp(`\\b${fieldName}\\s*:`, 'g');
+    for (let i = 0; i < maskedBody.length; i++) {
+        const ch = maskedBody[i];
+        if (ch === '{' || ch === '[') {
+            depth++;
+        } else if (ch === '}' || ch === ']') {
+            if (depth > 0) depth--;
+        } else if (depth === 0) {
+            headerRegex.lastIndex = i;
+            const match = headerRegex.exec(maskedBody);
+            if (match && match.index === i) {
+                const afterColon = body.substring(i + match[0].length).trimStart();
+                if (afterColon.startsWith('"')) {
+                    let strVal = '';
+                    let escape = false;
+                    for (let c = 1; c < afterColon.length; c++) {
+                        const ch2 = afterColon[c];
+                        if (escape) {
+                            strVal += ch2;
+                            escape = false;
+                        } else if (ch2 === '\\') {
+                            escape = true;
+                        } else if (ch2 === '"') {
+                            return strVal;
+                        } else {
+                            strVal += ch2;
+                        }
+                    }
+                    return strVal;
+                } else if (afterColon.startsWith("'")) {
+                    let strVal = '';
+                    let escape = false;
+                    for (let c = 1; c < afterColon.length; c++) {
+                        const ch2 = afterColon[c];
+                        if (escape) {
+                            strVal += ch2;
+                            escape = false;
+                        } else if (ch2 === '\\') {
+                            escape = true;
+                        } else if (ch2 === "'") {
+                            return strVal;
+                        } else {
+                            strVal += ch2;
+                        }
+                    }
+                    return strVal;
+                } else {
+                    const idMatch = /^([_a-zA-Z0-9.]+)/.exec(afterColon);
+                    if (idMatch) {
+                        return idMatch[1];
+                    }
+                }
+            }
+        }
+    }
+    return undefined;
+}
+
+function extractTopLevelList(body: string, maskedBody: string, fieldName: string): string[] {
+    let depth = 0;
+    const headerRegex = new RegExp(`\\b${fieldName}\\s*:\\s*\\[`, 'g');
+    for (let i = 0; i < maskedBody.length; i++) {
+        const ch = maskedBody[i];
+        if (ch === '{' || ch === '[') {
+            depth++;
+        } else if (ch === '}' || ch === ']') {
+            if (depth > 0) depth--;
+        } else if (depth === 0) {
+            headerRegex.lastIndex = i;
+            const match = headerRegex.exec(maskedBody);
+            if (match && match.index === i) {
+                const listStart = i + match[0].length;
+                let bracketDepth = 1;
+                for (let j = listStart; j < maskedBody.length; j++) {
+                    if (maskedBody[j] === '[') bracketDepth++;
+                    else if (maskedBody[j] === ']') {
+                        bracketDepth--;
+                        if (bracketDepth === 0) {
+                            const rawList = body.substring(listStart, j);
+                            return rawList.split(',')
+                                .map(item => item.trim().replace(/[\[\]{}]/g, '').trim())
+                                .filter(item => item.length > 0);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return [];
+}
+
 function getLineNumber(text: string, charIndex: number, baseLine: number = 1): number {
     let line = baseLine;
     const limit = Math.min(charIndex, text.length);
@@ -413,21 +510,23 @@ function parseDeclarationsFromBlock(blockBody: string, baseLine: number, filePat
             }
         }
 
-        const nameMatch = /name\s*:\s*(?:["']([^"']+)["']|([_a-zA-Z0-9]+))/.exec(pBody);
-        const typeNameMatch = /typeName\s*:\s*(?:["']([^"']+)["']|([_a-zA-Z0-9]+))/.exec(pBody);
-        const blockMatch = /block\s*:\s*([_a-zA-Z0-9]+)/.exec(pBody);
+        const nameVal = extractTopLevelField(pBody, block.maskedBody, 'name');
+        const typeNameVal = extractTopLevelField(pBody, block.maskedBody, 'typeName');
+        const blockVal = (kind === 'alias') ? extractTopLevelField(pBody, block.maskedBody, 'block') : undefined;
 
         if (!name) {
-            name = (nameMatch ? (nameMatch[1] || nameMatch[2]) : undefined) ||
-                   (typeNameMatch ? (typeNameMatch[1] || typeNameMatch[2]) : undefined) ||
-                   (blockMatch ? blockMatch[1] : undefined) ||
+            name = nameVal ||
+                   typeNameVal ||
+                   blockVal ||
                    (bracketContent ? `[${bracketContent}]` : `${kind}_line${dLine}`);
         }
 
-        const metaMatch = /meta\s*:\s*['"]([^'"]+)['"]/.exec(pBody);
-        const typeMatch = /type\s*:\s*([_a-zA-Z0-9.]+)/.exec(pBody);
-        const domainMatch = /domain\s*:\s*([_a-zA-Z0-9.]+)/.exec(pBody);
-        const defMatch = /default\s*:\s*([^;\n\r]+)/.exec(pBody);
+        const declMeta = extractTopLevelField(pBody, block.maskedBody, 'meta') ||
+                         extractTopLevelField(pBody, block.maskedBody, 'details');
+        const declType = extractTopLevelField(pBody, block.maskedBody, 'type');
+        const declDomain = extractTopLevelField(pBody, block.maskedBody, 'domain');
+        const declDefaultVal = extractTopLevelField(pBody, block.maskedBody, 'default');
+        const declBoundBlock = (kind === 'alias') ? extractTopLevelField(pBody, block.maskedBody, 'block') : undefined;
 
         let sig = `${kind} ${name}`;
         if (bracketContent !== undefined) {
@@ -443,11 +542,11 @@ function parseDeclarationsFromBlock(blockBody: string, baseLine: number, filePat
             line: dLine,
             signature: sig,
             body: pBody,
-            meta: metaMatch ? metaMatch[1] : undefined,
-            type: typeMatch ? typeMatch[1] : undefined,
-            domain: domainMatch ? domainMatch[1] : undefined,
-            defaultVal: defMatch ? defMatch[1].trim() : undefined,
-            boundBlock: blockMatch ? blockMatch[1] : undefined,
+            meta: declMeta,
+            type: declType,
+            domain: declDomain,
+            defaultVal: declDefaultVal,
+            boundBlock: declBoundBlock,
             arraySpec,
             generatorVar,
             generatorRange
@@ -508,21 +607,23 @@ function parseScopeTree(text: string, filePath: string, preMaskedText?: string):
             }
         }
 
-        const nameMatch = /name\s*:\s*(?:["']([^"']+)["']|([_a-zA-Z0-9]+))/.exec(block.body);
-        const typeNameMatch = /typeName\s*:\s*(?:["']([^"']+)["']|([_a-zA-Z0-9]+))/.exec(block.body);
-        const blockMatch = /block\s*:\s*([_a-zA-Z0-9]+)/.exec(block.body);
+        const nameVal = extractTopLevelField(block.body, block.maskedBody, 'name');
+        const typeNameVal = extractTopLevelField(block.body, block.maskedBody, 'typeName');
+        const blockVal = (kind === 'alias') ? extractTopLevelField(block.body, block.maskedBody, 'block') : undefined;
 
         if (!name) {
-            name = (nameMatch ? (nameMatch[1] || nameMatch[2]) : undefined) ||
-                   (typeNameMatch ? (typeNameMatch[1] || typeNameMatch[2]) : undefined) ||
-                   (blockMatch ? blockMatch[1] : undefined) ||
+            name = nameVal ||
+                   typeNameVal ||
+                   blockVal ||
                    (bracketContent ? `[${bracketContent}]` : `${kind}_line${startLine}`);
         }
 
-        const metaMatch = /meta\s*:\s*['"]([^'"]+)['"]/.exec(block.body);
-        const typeMatch = /type\s*:\s*([_a-zA-Z0-9.]+)/.exec(block.body);
-        const domainMatch = /domain\s*:\s*([_a-zA-Z0-9.]+)/.exec(block.body);
-        const defMatch = /default\s*:\s*([^;\n\r]+)/.exec(block.body);
+        const declMeta = extractTopLevelField(block.body, block.maskedBody, 'meta') ||
+                         extractTopLevelField(block.body, block.maskedBody, 'details');
+        const declType = extractTopLevelField(block.body, block.maskedBody, 'type');
+        const declDomain = extractTopLevelField(block.body, block.maskedBody, 'domain');
+        const declDefaultVal = extractTopLevelField(block.body, block.maskedBody, 'default');
+        const declBoundBlock = (kind === 'alias') ? extractTopLevelField(block.body, block.maskedBody, 'block') : undefined;
 
         const scope: ScopeContext = {
             name,
@@ -538,11 +639,11 @@ function parseScopeTree(text: string, filePath: string, preMaskedText?: string):
             arraySpec,
             generatorVar,
             generatorRange,
-            declMeta: metaMatch ? metaMatch[1] : undefined,
-            declType: typeMatch ? typeMatch[1] : undefined,
-            declDomain: domainMatch ? domainMatch[1] : undefined,
-            declDefaultVal: defMatch ? defMatch[1].trim() : undefined,
-            declBoundBlock: blockMatch ? blockMatch[1] : undefined
+            declMeta,
+            declType,
+            declDomain,
+            declDefaultVal,
+            declBoundBlock
         };
 
         // If this declaration has a generator variable (e.g. Index in 0:8), bind it inside this scope
@@ -794,13 +895,46 @@ function parsePortsFromBlock(blockBody: string, baseLine: number = 1, preMaskedB
         const typeMatch = /type\s*:\s*([_a-zA-Z0-9]+)/.exec(pBody);
         const defMatch = /default\s*:\s*([^;\n\r]+)/.exec(pBody);
 
+        let portTypeSpec = typeMatch ? typeMatch[1] : undefined;
+        if (!portTypeSpec) {
+            const typesMatch = /types\s*:\s*\[([^\]]*)\]/.exec(pBody);
+            if (typesMatch) {
+                portTypeSpec = typesMatch[1].trim();
+            }
+        }
+        let portMeta = metaMatch ? metaMatch[1] : undefined;
+
+        if (blockMatch) {
+            const boundName = blockMatch[1];
+            const blockDeclRegex = new RegExp(`\\b([_a-zA-Z0-9]+)\\s+${boundName}\\b[^{]*\\{([^{}]*)\\}`, 'g');
+            const bDeclMatch = blockDeclRegex.exec(blockBody);
+            if (bDeclMatch) {
+                const bKind = bDeclMatch[1];
+                const bInner = bDeclMatch[2];
+                if (!portTypeSpec) {
+                    const bTypeMatch = /type\s*:\s*([_a-zA-Z0-9]+)/.exec(bInner);
+                    if (bTypeMatch) {
+                        portTypeSpec = bTypeMatch[1];
+                    } else if (bKind === 'switch') {
+                        portTypeSpec = '_SwitchType';
+                    }
+                }
+                if (!portMeta) {
+                    const bMetaMatch = /meta\s*:\s*['"]([^'"]+)['"]/.exec(bInner);
+                    if (bMetaMatch) {
+                        portMeta = bMetaMatch[1];
+                    }
+                }
+            }
+        }
+
         ports.push({
             portType,
             portName,
             boundBlock: blockMatch ? blockMatch[1] : undefined,
             nameField: nameMatch ? nameMatch[1] : undefined,
-            meta: metaMatch ? metaMatch[1] : undefined,
-            types: typeMatch ? typeMatch[1] : undefined,
+            meta: portMeta,
+            types: portTypeSpec,
             defaultVal: defMatch ? defMatch[1].trim() : undefined,
             line: pLine
         });
@@ -844,43 +978,18 @@ function parseLibrarySymbols(text: string, filePath: string, preMaskedText?: str
             }
         }
 
-        const metaMatch = /meta\s*:\s*['"]([^'"]+)['"]/.exec(body);
-        const meta = metaMatch ? metaMatch[1] : undefined;
+        const meta = extractTopLevelField(body, block.maskedBody, 'meta') ||
+                     extractTopLevelField(body, block.maskedBody, 'details');
 
         const ports = parsePortsFromBlock(body, line, block.maskedBody);
 
-        const procMatch = /processing\s*:\s*["']([^"']+)["']/.exec(body);
-        const processing = procMatch ? procMatch[1] : undefined;
+        const processing = extractTopLevelField(body, block.maskedBody, 'processing');
 
-        const inheritsMatch = /inherits\s*:\s*\[([^\]]*)\]/.exec(body);
-        const inherits: string[] = [];
-        if (inheritsMatch) {
-            for (const r of inheritsMatch[1].split(',')) {
-                const tr = r.trim().replace(/[\[\]]/g, '').trim();
-                if (tr) inherits.push(tr);
-            }
-        }
+        const inherits = extractTopLevelList(body, block.maskedBody, 'inherits');
+        const inputs = extractTopLevelList(body, block.maskedBody, 'inputs');
+        const outputs = extractTopLevelList(body, block.maskedBody, 'outputs');
 
-        const inputsMatch = /inputs\s*:\s*\[([^\]]*)\]/.exec(body);
-        const inputs: string[] = [];
-        if (inputsMatch) {
-            for (const r of inputsMatch[1].split(',')) {
-                const tr = r.trim().replace(/\{[^}]*\}/g, '').trim();
-                if (tr) inputs.push(tr);
-            }
-        }
-
-        const outputsMatch = /outputs\s*:\s*\[([^\]]*)\]/.exec(body);
-        const outputs: string[] = [];
-        if (outputsMatch) {
-            for (const r of outputsMatch[1].split(',')) {
-                const tr = r.trim().replace(/\{[^}]*\}/g, '').trim();
-                if (tr) outputs.push(tr);
-            }
-        }
-
-        const targetBlockMatch = /block\s*:\s*([_a-zA-Z0-9]+)/.exec(body);
-        const targetBlock = targetBlockMatch ? targetBlockMatch[1] : undefined;
+        const targetBlock = (kind === 'alias') ? extractTopLevelField(body, block.maskedBody, 'block') : undefined;
 
         let sig = `${kind} ${name}`;
         if (bracketContent !== undefined) {
@@ -929,21 +1038,10 @@ function parseTypesFromText(text: string, filePath?: string, preMaskedText?: str
             if (text[i] === '\n') line++;
         }
 
-        const typeNameMatch = /typeName\s*:\s*(?:["']([^"']+)["']|([_a-zA-Z0-9]+))/.exec(body);
-        const typeName = typeNameMatch ? (typeNameMatch[1] || typeNameMatch[2]) : undefined;
-
-        const inheritsMatch = /inherits\s*:\s*\[([^\]]*)\]/.exec(body);
-        const inherits: string[] = [];
-        if (inheritsMatch) {
-            const raw = inheritsMatch[1].split(',');
-            for (let r of raw) {
-                r = r.trim().replace(/[\[\]]/g, '').trim();
-                if (r) inherits.push(r);
-            }
-        }
-
-        const metaMatch = /meta\s*:\s*["']([^"']+)["']/.exec(body);
-        const meta = metaMatch ? metaMatch[1] : undefined;
+        const typeName = extractTopLevelField(body, maskedBody, 'typeName');
+        const inherits = extractTopLevelList(body, maskedBody, 'inherits');
+        const meta = extractTopLevelField(body, maskedBody, 'meta') ||
+                     extractTopLevelField(body, maskedBody, 'details');
 
         const properties: PropertyInfo[] = [];
         const propHeaderRegex = /typeProperty\s*(?:([_a-zA-Z0-9]+)\s*)?(?=\{)/g;
@@ -1560,16 +1658,100 @@ function renderPropertyHover(
     return md;
 }
 
-function renderLibrarySymbolHover(sym: LibrarySymbol, allSymbols: Map<string, LibrarySymbol>): Hover {
+function formatPortItem(p: PortInfo, isProperty: boolean): string {
+    const displayName = isProperty ? (p.nameField || p.portName) : p.portName;
+    const typeStr = p.types || p.boundBlock || (p.portType.toLowerCase().includes('output') ? '_SwitchType' : '_IntType');
+
+    let dirTag = '';
+    if (!isProperty) {
+        if (p.portType.toLowerCase().includes('input')) {
+            dirTag = 'in: ';
+        } else if (p.portType.toLowerCase().includes('output')) {
+            dirTag = 'out: ';
+        }
+    } else if (p.portType.toLowerCase().includes('output')) {
+        dirTag = 'out: ';
+    }
+
+    let tag = `${dirTag}\`${typeStr}\``;
+    if (isProperty && p.defaultVal !== undefined) {
+        tag += `, default: \`${p.defaultVal}\``;
+    }
+
+    let line = `- **\`${displayName}\`** (${tag})`;
+    if (p.meta) {
+        line += ` — *${p.meta}*`;
+    }
+    return line;
+}
+
+function renderPortsSection(ports: PortInfo[]): string {
+    const mainPorts: PortInfo[] = [];
+    const propertyPorts: PortInfo[] = [];
+    const otherPorts: PortInfo[] = [];
+
+    for (const p of ports) {
+        const pType = p.portType.toLowerCase();
+        if (pType.startsWith('main')) {
+            mainPorts.push(p);
+        } else if (pType.startsWith('property')) {
+            propertyPorts.push(p);
+        } else {
+            otherPorts.push(p);
+        }
+    }
+
+    let result = '';
+
+    if (mainPorts.length > 0) {
+        result += `\n**Main Ports**:\n`;
+        for (const p of mainPorts) {
+            result += `${formatPortItem(p, false)}\n`;
+        }
+    }
+
+    if (propertyPorts.length > 0) {
+        result += `\n**Property Ports**:\n`;
+        for (const p of propertyPorts) {
+            result += `${formatPortItem(p, true)}\n`;
+        }
+    }
+
+    if (otherPorts.length > 0) {
+        result += `\n**Other Ports**:\n`;
+        for (const p of otherPorts) {
+            result += `${formatPortItem(p, false)}\n`;
+        }
+    }
+
+    return result;
+}
+
+function renderLibrarySymbolHover(sym: LibrarySymbol, allSymbols: Map<string, LibrarySymbol>, allTypes?: Map<string, TypeInfo>): Hover {
     let body = '';
 
-    if (sym.targetBlock) {
+    const typeInfo = allTypes ? (allTypes.get(sym.kind) || allTypes.get(TYPE_ALIASES[sym.kind] || '')) : undefined;
+    let declTypeStr = `\`${sym.kind}\``;
+    if (typeInfo && typeInfo.name && typeInfo.name !== sym.kind) {
+        declTypeStr += ` (\`${typeInfo.name}\``;
+        if (typeInfo.inherits && typeInfo.inherits.length) {
+            declTypeStr += `, inherits \`${typeInfo.inherits.join(', ')}\``;
+        }
+        declTypeStr += `)`;
+    }
+    body += `- **Declaration Type**: ${declTypeStr}\n`;
+
+    if (sym.kind === 'alias' && sym.targetBlock) {
         const targetSym = allSymbols.get(sym.targetBlock);
         if (targetSym) {
             body += `🔗 **Points to Target**: [${sym.targetBlock}](${formatClickableLink(targetSym.filePath, targetSym.line).match(/\(([^)]+)\)/)?.[1]})\n\n`;
         } else {
             body += `🔗 **Target Block**: \`${sym.targetBlock}\`\n\n`;
         }
+    }
+
+    if (sym.meta) {
+        body += `\n*${sym.meta}*\n\n`;
     }
 
     if (sym.inputs && sym.inputs.length) {
@@ -1583,16 +1765,7 @@ function renderLibrarySymbolHover(sym: LibrarySymbol, allSymbols: Map<string, Li
     }
 
     if (sym.ports && sym.ports.length) {
-        body += `\n**Ports**:\n`;
-        for (const p of sym.ports) {
-            let pLine = `- \`${p.portName}\` (\`${p.portType}\`)`;
-            if (p.boundBlock) pLine += ` ➔ block \`${p.boundBlock}\``;
-            if (p.nameField) pLine += ` (id: \`"${p.nameField}"\`)`;
-            if (p.types) pLine += ` [${p.types}]`;
-            if (p.meta) pLine += `\n  *${p.meta}*`;
-            body += `${pLine}\n`;
-        }
-        body += `\n`;
+        body += renderPortsSection(sym.ports);
     }
 
     if (sym.inherits && sym.inherits.length) {
@@ -1613,29 +1786,17 @@ function renderLibrarySymbolHover(sym: LibrarySymbol, allSymbols: Map<string, Li
         }
 
         if (inheritedPorts.length > 0) {
-            body += `**Inherited Ports**:\n\n`;
+            body += `\n**Inherited Ports**:\n`;
             for (const group of inheritedPorts) {
                 const parentSym = allSymbols.get(group.parentName);
-                let parentHeader = `**From \`${group.parentName}\`**`;
+                let parentHeader = `*From \`${group.parentName}\`*`;
                 if (parentSym && parentSym.filePath) {
-                    parentHeader = `**From [${group.parentName}](${formatClickableLink(parentSym.filePath, parentSym.line).match(/\(([^)]+)\)/)?.[1]})**`;
+                    parentHeader = `*From [${group.parentName}](${formatClickableLink(parentSym.filePath, parentSym.line).match(/\(([^)]+)\)/)?.[1]})*`;
                 }
-                body += `${parentHeader}:\n`;
-                for (const p of group.ports) {
-                    let pLine = `- \`${p.portName}\` (\`${p.portType}\`)`;
-                    if (p.boundBlock) pLine += ` ➔ block \`${p.boundBlock}\``;
-                    if (p.nameField) pLine += ` (id: \`"${p.nameField}"\`)`;
-                    if (p.types) pLine += ` [${p.types}]`;
-                    if (p.meta) pLine += `\n  *${p.meta}*`;
-                    body += `${pLine}\n`;
-                }
-                body += `\n`;
+                body += `\n${parentHeader}:\n`;
+                body += renderPortsSection(group.ports);
             }
         }
-    }
-
-    if (sym.meta) {
-        body += `\n---\n*${sym.meta}*\n`;
     }
 
     body += `\n---\n`;
@@ -1643,6 +1804,9 @@ function renderLibrarySymbolHover(sym: LibrarySymbol, allSymbols: Map<string, Li
         body += `🔗 **Inherits from**: \`${sym.inherits.join(', ')}\`\n\n`;
     }
     body += `📍 **Declared in**: ${formatClickableLink(sym.filePath, sym.line)}\n`;
+    if (typeInfo && typeInfo.filePath) {
+        body += `🔗 **Type Definition**: ${formatClickableLink(typeInfo.filePath, typeInfo.line || 1)}\n`;
+    }
 
     return createCompactHover(sym.signature, body);
 }
@@ -1886,7 +2050,14 @@ function registerFallbackProviders(context: ExtensionContext) {
                 }
             }
 
-            // 6. Lexical Scoping & ScopeStack Resolution for local signals, switches, blocks, ports, and variables
+            // 6. Check if word is a function, reaction, action, module, or symbol with ports
+            const allSymbols = getAllLibrarySymbols(document);
+            const libSym = allSymbols.get(word);
+            if (libSym && (libSym.ports?.length || libSym.kind === 'reaction' || libSym.kind === 'action' || libSym.kind === 'module' || libSym.kind === 'platformModule')) {
+                return renderLibrarySymbolHover(libSym, allSymbols, allTypes);
+            }
+
+            // 7. Lexical Scoping & ScopeStack Resolution for local signals, switches, blocks, ports, and variables
             const { scopeTree: rootScope } = getCachedDocData(document);
             const scopeStack = buildScopeStack(rootScope, position.line + 1);
             const decl = findDeclarationInScopeStack(word, scopeStack);
@@ -1947,11 +2118,9 @@ function registerFallbackProviders(context: ExtensionContext) {
                 return createCompactHover(decl.signature, body);
             }
 
-            // 7. Library Symbols across the workspace / standard library files
-            const allSymbols = getAllLibrarySymbols(document);
-            const libSym = allSymbols.get(word);
+            // 8. Other Library Symbols fallback
             if (libSym) {
-                return renderLibrarySymbolHover(libSym, allSymbols);
+                return renderLibrarySymbolHover(libSym, allSymbols, allTypes);
             }
 
             return undefined;
