@@ -57,9 +57,9 @@ Stride standard library files (`.stride`) define built-in types, platform module
 > **Resolution Priority Order**:
 > 1. User configuration in VS Code settings: `stride.strideroot` (`settings.json`).
 > 2. Environment variable: `STRIDEROOT`.
-> 3. Adjacent workspace / repo candidate directories (e.g. `C:/Users/Andres/source/repos/Stride/strideroot`, `../../Stride/strideroot`, `../Stride/strideroot`).
-> 4. **Bundled Fallback Library**: `./strideroot` inside the extension.
+> 3. **Bundled Fallback Library**: `./strideroot` inside the extension.
 >
+> No custom or adjacent directory paths are searched until a formal include directory mechanism is defined.
 > **The bundled fallback directory must NEVER override explicit user settings or environment variables.** It only acts as the ultimate fallback when no external library is provided.
 
 ---

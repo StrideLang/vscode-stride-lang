@@ -246,21 +246,15 @@ std::shared_ptr<DeclarationNode> findPortForBlockInScopeStack(const ScopeStack &
 StrideLibrary g_library;
 ASTNode g_libraryRootTree = nullptr;
 
-std::string findStrideRoot() {
+std::string findStrideRoot(const std::string &explicitRoot = "") {
+    if (!explicitRoot.empty() && std::filesystem::exists(explicitRoot)) return explicitRoot;
+
     const char *envRoot = std::getenv("STRIDEROOT");
     if (envRoot && std::filesystem::exists(envRoot)) return std::string(envRoot);
     
     std::vector<std::string> candidates = {
-        "C:/Users/Andres/source/repos/Stride/strideroot",
-        "C:\\Users\\Andres\\source\\repos\\Stride\\strideroot",
-        "../../Stride/strideroot",
-        "../Stride/strideroot",
-        "C:/Users/Andres/source/repos/boardgame/libgame/external/stridejit/tests/data",
-        "C:/Users/Andres/source/repos/vscode-stride-lang/strideroot",
         "strideroot",
-        "./strideroot",
-        "../strideroot",
-        "../../strideroot"
+        "./strideroot"
     };
     for (const auto &c : candidates) {
         if (std::filesystem::exists(c)) return c;
@@ -268,8 +262,8 @@ std::string findStrideRoot() {
     return "";
 }
 
-void initLibrary() {
-    std::string sRoot = findStrideRoot();
+void initLibrary(const std::string &explicitRoot = "") {
+    std::string sRoot = findStrideRoot(explicitRoot);
     if (!sRoot.empty()) {
         try {
             g_library.initializeLibrary(sRoot);
@@ -296,20 +290,21 @@ void publishDiagnostics(const std::string &uri, const std::vector<LangError> &er
     json << "\"uri\":\"" << escapeJson(uri) << "\",";
     json << "\"diagnostics\":[";
 
+    // Split document lines once for all errors
+    std::vector<std::string> docLines;
+    {
+        std::istringstream stream(docText);
+        std::string l;
+        while (std::getline(stream, l)) {
+            docLines.push_back(l);
+        }
+    }
+
     for (size_t i = 0; i < errors.size(); i++) {
         auto err = errors[i];
         int line = (err.lineNumber > 0) ? (err.lineNumber - 1) : 0;
         int startChar = 0;
         int endChar = 100;
-
-        std::vector<std::string> docLines;
-        {
-            std::istringstream stream(docText);
-            std::string l;
-            while (std::getline(stream, l)) {
-                docLines.push_back(l);
-            }
-        }
 
         std::vector<std::string> searchTokens;
         if (err.type == LangError::InvalidPort) {
@@ -864,7 +859,17 @@ int main(int argc, char **argv) {
     _setmode(_fileno(stdout), _O_BINARY);
 #endif
 
-    initLibrary();
+    std::string explicitRoot = "";
+    for (int i = 1; i < argc; i++) {
+        std::string arg = argv[i];
+        if (arg == "--strideroot" && i + 1 < argc) {
+            explicitRoot = argv[++i];
+        } else if (arg.rfind("--strideroot=", 0) == 0) {
+            explicitRoot = arg.substr(13);
+        }
+    }
+
+    initLibrary(explicitRoot);
 
     while (std::cin.good()) {
         std::string headerLine;

@@ -49,13 +49,7 @@ function findServerBinary(context: ExtensionContext): string | undefined {
         context.asAbsolutePath(path.join('server', 'build', 'Debug', 'stride-lsp.exe')),
         context.asAbsolutePath(path.join('server', 'build', 'Release', 'stride-lsp.exe')),
         context.asAbsolutePath(path.join('server', 'build', 'stride-lsp.exe')),
-        'C:\\Users\\Andres\\source\\repos\\vscode-stride-lang\\server\\bin\\stride-lsp.exe',
-        'C:\\Users\\Andres\\source\\repos\\vscode-stride-lang\\server\\bin\\Debug\\stride-lsp.exe',
-        'C:\\Users\\Andres\\source\\repos\\vscode-stride-lang\\server\\bin\\Release\\stride-lsp.exe',
-        'C:\\Users\\Andres\\source\\repos\\vscode-stride-lang\\server\\build\\Debug\\stride-lsp.exe',
-        'C:\\Users\\Andres\\source\\repos\\vscode-stride-lang\\server\\build\\Release\\stride-lsp.exe',
-        'C:\\Users\\Andres\\source\\repos\\vscode-stride-lang\\server\\build\\stride-lsp.exe',
-        'C:\\Users\\Andres\\source\\repos\\boardgame\\build\\Desktop_Qt_6_7_3_MSVC2022_64bit-Debug\\libgame\\external\\codegen\\Debug\\stride-lsp.exe',
+        context.asAbsolutePath(path.join('server', 'bin', 'stride-lsp')),
         'stride-lsp.exe',
         'stride-lsp'
     ];
@@ -271,7 +265,7 @@ function isOffsetInCommentOrString(text: string, offset: number): boolean {
     return false;
 }
 
-function extractBraceBlock(text: string, startIndex: number, maskedText?: string): { body: string; endIndex: number } | null {
+function extractBraceBlock(text: string, startIndex: number, maskedText?: string): { body: string; maskedBody: string; endIndex: number } | null {
     const scanText = maskedText || maskCommentsAndStrings(text);
     let braceCount = 0;
     let inBrace = false;
@@ -288,14 +282,18 @@ function extractBraceBlock(text: string, startIndex: number, maskedText?: string
         } else if (char === '}') {
             braceCount--;
             if (braceCount === 0 && inBrace) {
-                return { body: text.substring(bodyStart, i), endIndex: i + 1 };
+                return {
+                    body: text.substring(bodyStart, i),
+                    maskedBody: scanText.substring(bodyStart, i),
+                    endIndex: i + 1
+                };
             }
         }
     }
     return null;
 }
 
-function extractSquareBracketBlock(text: string, startIndex: number, maskedText?: string): { body: string; endIndex: number } | null {
+function extractSquareBracketBlock(text: string, startIndex: number, maskedText?: string): { body: string; maskedBody: string; endIndex: number } | null {
     const scanText = maskedText || maskCommentsAndStrings(text);
     let bracketCount = 0;
     let inBracket = false;
@@ -312,7 +310,11 @@ function extractSquareBracketBlock(text: string, startIndex: number, maskedText?
         } else if (char === ']') {
             bracketCount--;
             if (bracketCount === 0 && inBracket) {
-                return { body: text.substring(bodyStart, i), endIndex: i + 1 };
+                return {
+                    body: text.substring(bodyStart, i),
+                    maskedBody: scanText.substring(bodyStart, i),
+                    endIndex: i + 1
+                };
             }
         }
     }
@@ -364,6 +366,12 @@ interface ScopeContext {
     arraySpec?: string;
     generatorVar?: string;
     generatorRange?: string;
+    declMeta?: string;
+    declType?: string;
+    declDomain?: string;
+    declDefaultVal?: string;
+    declBoundBlock?: string;
+    enclosingDecls?: EnclosingDecl[];
 }
 
 function stripComments(text: string): string {
@@ -449,8 +457,8 @@ function parseDeclarationsFromBlock(blockBody: string, baseLine: number, filePat
     return decls;
 }
 
-function parseScopeTree(text: string, filePath: string): ScopeContext {
-    const maskedText = maskCommentsAndStrings(text);
+function parseScopeTree(text: string, filePath: string, preMaskedText?: string): ScopeContext {
+    const maskedText = preMaskedText || maskCommentsAndStrings(text);
     const lines = text.split(/\r?\n/);
     const rootScope: ScopeContext = {
         name: '<root>',
@@ -470,6 +478,7 @@ function parseScopeTree(text: string, filePath: string): ScopeContext {
     let match;
 
     const discoveredScopes: ScopeContext[] = [];
+    const enclosingDecls: EnclosingDecl[] = [];
 
     while ((match = blockHeaderRegex.exec(maskedText)) !== null) {
         const kind = match[1];
@@ -499,15 +508,21 @@ function parseScopeTree(text: string, filePath: string): ScopeContext {
             }
         }
 
+        const nameMatch = /name\s*:\s*(?:["']([^"']+)["']|([_a-zA-Z0-9]+))/.exec(block.body);
+        const typeNameMatch = /typeName\s*:\s*(?:["']([^"']+)["']|([_a-zA-Z0-9]+))/.exec(block.body);
+        const blockMatch = /block\s*:\s*([_a-zA-Z0-9]+)/.exec(block.body);
+
         if (!name) {
-            const nameMatch = /name\s*:\s*(?:["']([^"']+)["']|([_a-zA-Z0-9]+))/.exec(block.body);
-            const typeNameMatch = /typeName\s*:\s*(?:["']([^"']+)["']|([_a-zA-Z0-9]+))/.exec(block.body);
-            const blockMatch = /block\s*:\s*([_a-zA-Z0-9]+)/.exec(block.body);
             name = (nameMatch ? (nameMatch[1] || nameMatch[2]) : undefined) ||
                    (typeNameMatch ? (typeNameMatch[1] || typeNameMatch[2]) : undefined) ||
                    (blockMatch ? blockMatch[1] : undefined) ||
                    (bracketContent ? `[${bracketContent}]` : `${kind}_line${startLine}`);
         }
+
+        const metaMatch = /meta\s*:\s*['"]([^'"]+)['"]/.exec(block.body);
+        const typeMatch = /type\s*:\s*([_a-zA-Z0-9.]+)/.exec(block.body);
+        const domainMatch = /domain\s*:\s*([_a-zA-Z0-9.]+)/.exec(block.body);
+        const defMatch = /default\s*:\s*([^;\n\r]+)/.exec(block.body);
 
         const scope: ScopeContext = {
             name,
@@ -522,7 +537,12 @@ function parseScopeTree(text: string, filePath: string): ScopeContext {
             children: [],
             arraySpec,
             generatorVar,
-            generatorRange
+            generatorRange,
+            declMeta: metaMatch ? metaMatch[1] : undefined,
+            declType: typeMatch ? typeMatch[1] : undefined,
+            declDomain: domainMatch ? domainMatch[1] : undefined,
+            declDefaultVal: defMatch ? defMatch[1].trim() : undefined,
+            declBoundBlock: blockMatch ? blockMatch[1] : undefined
         };
 
         // If this declaration has a generator variable (e.g. Index in 0:8), bind it inside this scope
@@ -539,7 +559,7 @@ function parseScopeTree(text: string, filePath: string): ScopeContext {
             });
         }
 
-        const ports = parsePortsFromBlock(block.body, startLine);
+        const ports = parsePortsFromBlock(block.body, startLine, block.maskedBody);
         for (const p of ports) {
             scope.ports.set(p.portName, p);
             if (p.nameField) {
@@ -550,15 +570,17 @@ function parseScopeTree(text: string, filePath: string): ScopeContext {
             }
         }
 
-        const directDecls = parseDeclarationsFromBlock(block.body, startLine, filePath);
-        for (const d of directDecls) {
-            if (scope.boundPorts.has(d.name)) {
-                d.associatedPort = scope.boundPorts.get(d.name);
-            }
-            scope.declarations.set(d.name, d);
-        }
-
         discoveredScopes.push(scope);
+        enclosingDecls.push({
+            kind,
+            name,
+            start: startOffset,
+            end: endOffset,
+            line: startLine,
+            arraySpec,
+            generatorVar,
+            generatorRange
+        });
     }
 
     // Sort scopes by span size ascending so innermost scopes attach to the tightest enclosing parent
@@ -580,21 +602,29 @@ function parseScopeTree(text: string, filePath: string): ScopeContext {
         parentScope.children.push(scope);
         if (scope.name && !scope.name.startsWith('[') && !scope.name.includes('_line')) {
             if (!parentScope.declarations.has(scope.name)) {
-                parentScope.declarations.set(scope.name, {
+                const decl: ScopeDeclaration = {
                     name: scope.name,
                     kind: scope.kind,
                     line: scope.startLine,
                     signature: `${scope.kind} ${scope.name}${scope.arraySpec ? `[${scope.arraySpec}]` : ''}`,
-                    type: scope.kind,
-                    meta: `${scope.kind} declaration`,
+                    type: scope.declType || scope.kind,
+                    domain: scope.declDomain,
+                    meta: scope.declMeta || `${scope.kind} declaration`,
+                    defaultVal: scope.declDefaultVal,
+                    boundBlock: scope.declBoundBlock,
                     arraySpec: scope.arraySpec,
                     generatorVar: scope.generatorVar,
                     generatorRange: scope.generatorRange
-                });
+                };
+                if (parentScope.boundPorts.has(scope.name)) {
+                    decl.associatedPort = parentScope.boundPorts.get(scope.name);
+                }
+                parentScope.declarations.set(scope.name, decl);
             }
         }
     }
 
+    rootScope.enclosingDecls = enclosingDecls;
     return rootScope;
 }
 
@@ -668,61 +698,46 @@ function getLibraryFiles(): string[] {
     return cachedLibraryFiles;
 }
 
-function findKnownLibraryFiles(): string[] {
-    const files: string[] = [];
+function getStrideRootDirs(): string[] {
     const rootDirs: string[] = [];
-
     const config = workspace.getConfiguration('stride');
     const configuredStrideroot = config.get<string>('strideroot');
     if (configuredStrideroot && fs.existsSync(configuredStrideroot)) {
         rootDirs.push(path.join(configuredStrideroot, 'library'));
         rootDirs.push(configuredStrideroot);
+        return rootDirs;
     }
 
     if (process.env.STRIDEROOT && fs.existsSync(process.env.STRIDEROOT)) {
         rootDirs.push(path.join(process.env.STRIDEROOT, 'library'));
         rootDirs.push(process.env.STRIDEROOT);
+        return rootDirs;
     }
-
-    const candidatePaths = [
-        'C:/Users/Andres/source/repos/Stride/strideroot/library',
-        'C:\\Users\\Andres\\source\\repos\\Stride\\strideroot\\library',
-        'C:/Users/Andres/source/repos/Stride/strideroot',
-        '../../Stride/strideroot/library',
-        '../Stride/strideroot/library',
-        'C:/Users/Andres/source/repos/boardgame/libgame',
-        'C:/Users/Andres/source/repos/boardgame/libgame/external/stridejit/tests/data',
-        'C:/Users/Andres/source/repos/boardgame/libgame/external/strideparser',
-        'C:/Users/Andres/source/repos/boardgame/libgame/external/codegen'
-    ];
-    for (const c of candidatePaths) {
-        if (!rootDirs.includes(c)) rootDirs.push(c);
-    }
-
-    if (workspace.workspaceFolders) {
-        for (const wf of workspace.workspaceFolders) {
-            rootDirs.push(wf.uri.fsPath);
-        }
-    }
-
-    const includePaths = config.get<string[]>('includePaths') || [];
-    rootDirs.push(...includePaths);
 
     // Bundled strideroot is strictly the final fallback
     if (extensionContext) {
         const bundledRoot = extensionContext.asAbsolutePath('strideroot');
         if (fs.existsSync(bundledRoot)) {
             const bundledLib = path.join(bundledRoot, 'library');
-            if (!rootDirs.includes(bundledLib)) rootDirs.push(bundledLib);
-            if (!rootDirs.includes(bundledRoot)) rootDirs.push(bundledRoot);
+            if (fs.existsSync(bundledLib)) rootDirs.push(bundledLib);
+            rootDirs.push(bundledRoot);
         }
     }
+
+    return rootDirs;
+}
+
+function findKnownLibraryFiles(): string[] {
+    const files: string[] = [];
+    const fileSet = new Set<string>();
+    const rootDirs = getStrideRootDirs();
 
     const visitedDirs = new Set<string>();
 
     function scanDir(dir: string, depth = 0) {
-        if (depth > 6 || visitedDirs.has(dir) || !fs.existsSync(dir)) return;
-        visitedDirs.add(dir);
+        const normDir = path.normalize(dir).toLowerCase();
+        if (depth > 6 || visitedDirs.has(normDir) || !fs.existsSync(dir)) return;
+        visitedDirs.add(normDir);
         try {
             const entries = fs.readdirSync(dir, { withFileTypes: true });
             for (const entry of entries) {
@@ -732,7 +747,8 @@ function findKnownLibraryFiles(): string[] {
                         scanDir(fullPath, depth + 1);
                     }
                 } else if (entry.isFile() && entry.name.endsWith('.stride')) {
-                    if (!files.includes(fullPath)) {
+                    if (!fileSet.has(fullPath)) {
+                        fileSet.add(fullPath);
                         files.push(fullPath);
                     }
                 }
@@ -753,8 +769,8 @@ function formatClickableLink(filePath: string, line: number = 1): string {
     return `[${fileName}:${line}](file:///${normPath}#L${line})`;
 }
 
-function parsePortsFromBlock(blockBody: string, baseLine: number = 1): PortInfo[] {
-    const maskedBody = maskCommentsAndStrings(blockBody);
+function parsePortsFromBlock(blockBody: string, baseLine: number = 1, preMaskedBody?: string): PortInfo[] {
+    const maskedBody = preMaskedBody || maskCommentsAndStrings(blockBody);
     const ports: PortInfo[] = [];
     const portHeaderRegex = /\b(mainInputPort|mainOutputPort|propertyInputPort|propertyOutputPort|port)\s+([_a-zA-Z0-9]+)(?:\s*\[((?:[^\[\]]|\[[^\]]*\])*)\])?\s*(?=\{)/g;
     let match;
@@ -792,8 +808,8 @@ function parsePortsFromBlock(blockBody: string, baseLine: number = 1): PortInfo[
     return ports;
 }
 
-function parseLibrarySymbols(text: string, filePath: string): LibrarySymbol[] {
-    const maskedText = maskCommentsAndStrings(text);
+function parseLibrarySymbols(text: string, filePath: string, preMaskedText?: string): LibrarySymbol[] {
+    const maskedText = preMaskedText || maskCommentsAndStrings(text);
     const symbols: LibrarySymbol[] = [];
     const declHeaderRegex = /\b([_a-zA-Z0-9]+)\s+([_a-zA-Z0-9]+)(?:\s*\[((?:[^\[\]]|\[[^\]]*\])*)\])?(?:@\s*[_a-zA-Z0-9]+)?\s*(?=\{)/g;
     let match;
@@ -831,7 +847,7 @@ function parseLibrarySymbols(text: string, filePath: string): LibrarySymbol[] {
         const metaMatch = /meta\s*:\s*['"]([^'"]+)['"]/.exec(body);
         const meta = metaMatch ? metaMatch[1] : undefined;
 
-        const ports = parsePortsFromBlock(body, line);
+        const ports = parsePortsFromBlock(body, line, block.maskedBody);
 
         const procMatch = /processing\s*:\s*["']([^"']+)["']/.exec(body);
         const processing = procMatch ? procMatch[1] : undefined;
@@ -893,8 +909,8 @@ function parseLibrarySymbols(text: string, filePath: string): LibrarySymbol[] {
     return symbols;
 }
 
-function parseTypesFromText(text: string, filePath?: string): TypeInfo[] {
-    const maskedText = maskCommentsAndStrings(text);
+function parseTypesFromText(text: string, filePath?: string, preMaskedText?: string): TypeInfo[] {
+    const maskedText = preMaskedText || maskCommentsAndStrings(text);
     const types: TypeInfo[] = [];
     const typeHeaderRegex = /\btype\s+(_*[a-zA-Z0-9_]+)\s*(?=\{)/g;
     let match;
@@ -906,7 +922,7 @@ function parseTypesFromText(text: string, filePath?: string): TypeInfo[] {
         if (!block) continue;
 
         const body = block.body;
-        const maskedBody = maskCommentsAndStrings(body);
+        const maskedBody = block.maskedBody;
 
         let line = 1;
         for (let i = 0; i < match.index; i++) {
@@ -1037,12 +1053,120 @@ function getLibraryTypes(): Map<string, TypeInfo> {
     return typeMap;
 }
 
-function getAllTypes(document: TextDocument): Map<string, TypeInfo> {
+function getStrideFileContent(filePath: string): string | null {
+    try {
+        const norm = path.normalize(filePath);
+        const openDoc = workspace.textDocuments.find(d => path.normalize(d.uri.fsPath) === norm);
+        if (openDoc) {
+            return openDoc.getText();
+        }
+        if (fs.existsSync(norm)) {
+            return fs.readFileSync(norm, 'utf8');
+        }
+    } catch (e) {}
+    return null;
+}
+
+function getRelatedStrideFiles(document: TextDocument): string[] {
+    const relatedFiles = new Set<string>();
+    if (!document.uri || document.uri.scheme !== 'file' || !document.uri.fsPath) {
+        return [];
+    }
+    const currentPath = path.normalize(document.uri.fsPath);
+    const docDir = path.dirname(currentPath);
+
+    // 1. Sibling .stride files and directory names in the current directory
+    const subDirs: string[] = [];
+    try {
+        if (fs.existsSync(docDir)) {
+            const entries = fs.readdirSync(docDir, { withFileTypes: true });
+            for (const entry of entries) {
+                if (entry.isFile() && entry.name.endsWith('.stride')) {
+                    const fullPath = path.normalize(path.join(docDir, entry.name));
+                    if (fullPath !== currentPath) {
+                        relatedFiles.add(fullPath);
+                    }
+                } else if (entry.isDirectory()) {
+                    if (entry.name !== '.git' && entry.name !== 'node_modules' && entry.name !== 'build' && entry.name !== 'out') {
+                        subDirs.push(path.normalize(path.join(docDir, entry.name)));
+                    }
+                }
+            }
+        }
+    } catch (e) {}
+
+    // 2. Search directories for imports: strictly current directory, directory names in current directory, and stride root
+    const strideRootDirs = getStrideRootDirs();
+    const searchDirs = [
+        docDir,
+        ...subDirs,
+        ...strideRootDirs
+    ];
+
+    // Explicitly imported modules: `import <ModuleName>` (with transitive resolution)
+    const queue: string[] = [currentPath, ...relatedFiles];
+    const visited = new Set<string>([currentPath]);
+
+    while (queue.length > 0) {
+        const filePath = queue.shift()!;
+        if (visited.has(filePath) && filePath !== currentPath) continue;
+        visited.add(filePath);
+
+        try {
+            const content = getStrideFileContent(filePath);
+            if (!content) continue;
+            const importRegex = /^\s*import\s+([_a-zA-Z0-9]+)/gm;
+            let impMatch;
+            while ((impMatch = importRegex.exec(content)) !== null) {
+                const modName = impMatch[1];
+                for (const dir of searchDirs) {
+                    let candidate = path.normalize(path.join(dir, `${modName}.stride`));
+                    if (candidate !== currentPath && fs.existsSync(candidate)) {
+                        if (!relatedFiles.has(candidate)) {
+                            relatedFiles.add(candidate);
+                            queue.push(candidate);
+                        }
+                        break;
+                    }
+                    candidate = path.normalize(path.join(dir, modName, `${modName}.stride`));
+                    if (candidate !== currentPath && fs.existsSync(candidate)) {
+                        if (!relatedFiles.has(candidate)) {
+                            relatedFiles.add(candidate);
+                            queue.push(candidate);
+                        }
+                        break;
+                    }
+                }
+            }
+        } catch (e) {}
+    }
+
+    return Array.from(relatedFiles);
+}
+
+function buildAllTypes(document: TextDocument, preMaskedText?: string): Map<string, TypeInfo> {
     const baseTypes = getLibraryTypes();
     const typeMap = new Map<string, TypeInfo>(baseTypes);
 
+    const relatedFiles = getRelatedStrideFiles(document);
+    for (const relPath of relatedFiles) {
+        try {
+            const content = getStrideFileContent(relPath);
+            if (content) {
+                const parsed = parseTypesFromText(content, relPath);
+                for (const t of parsed) {
+                    typeMap.set(t.name, t);
+                    if (t.typeName) {
+                        typeMap.set(t.typeName, t);
+                    }
+                }
+            }
+        } catch (e) {}
+    }
+
     try {
-        const docParsed = parseTypesFromText(document.getText(), document.uri.fsPath);
+        const text = document.getText();
+        const docParsed = parseTypesFromText(text, document.uri.fsPath, preMaskedText);
         for (const t of docParsed) {
             typeMap.set(t.name, t);
             if (t.typeName) {
@@ -1058,6 +1182,10 @@ function getAllTypes(document: TextDocument): Map<string, TypeInfo> {
     }
 
     return typeMap;
+}
+
+function getAllTypes(document: TextDocument): Map<string, TypeInfo> {
+    return getCachedDocData(document).allTypes;
 }
 
 function resolveAllPropertiesForType(kind: string, allTypes: Map<string, TypeInfo>): Map<string, PropertyInfo> {
@@ -1116,41 +1244,37 @@ function getLibrarySymbols(): Map<string, LibrarySymbol> {
     return symbolMap;
 }
 
-function getAllLibrarySymbols(document: TextDocument): Map<string, LibrarySymbol> {
+function buildAllSymbols(document: TextDocument, preMaskedText?: string): Map<string, LibrarySymbol> {
     const baseSymbols = getLibrarySymbols();
     const symbolMap = new Map<string, LibrarySymbol>(baseSymbols);
 
+    // Parse symbols from sibling and imported .stride files
+    const relatedFiles = getRelatedStrideFiles(document);
+    for (const relPath of relatedFiles) {
+        try {
+            const content = getStrideFileContent(relPath);
+            if (content) {
+                const parsed = parseLibrarySymbols(content, relPath);
+                for (const s of parsed) {
+                    symbolMap.set(s.name, s);
+                }
+            }
+        } catch (e) {}
+    }
+
     try {
-        const docParsed = parseLibrarySymbols(document.getText(), document.uri.fsPath);
+        const text = document.getText();
+        const docParsed = parseLibrarySymbols(text, document.uri.fsPath, preMaskedText);
         for (const s of docParsed) {
             symbolMap.set(s.name, s);
         }
     } catch (e) {}
 
-    // Also resolve relative imports from the document's directory
-    try {
-        if (document.uri && document.uri.scheme === 'file' && document.uri.fsPath) {
-            const docDir = path.dirname(document.uri.fsPath);
-            const importRegex = /^\s*import\s+([_a-zA-Z0-9]+)/gm;
-            let impMatch;
-            const text = document.getText();
-            while ((impMatch = importRegex.exec(text)) !== null) {
-                const modName = impMatch[1];
-                const candidate = path.join(docDir, `${modName}.stride`);
-                if (fs.existsSync(candidate)) {
-                    try {
-                        const content = fs.readFileSync(candidate, 'utf8');
-                        const parsed = parseLibrarySymbols(content, candidate);
-                        for (const s of parsed) {
-                            symbolMap.set(s.name, s);
-                        }
-                    } catch (e) {}
-                }
-            }
-        }
-    } catch (e) {}
-
     return symbolMap;
+}
+
+function getAllLibrarySymbols(document: TextDocument): Map<string, LibrarySymbol> {
+    return getCachedDocData(document).allSymbols;
 }
 
 const HOVER_STYLE = 'font-size: 0.76em; line-height: 1.3;';
@@ -1285,61 +1409,17 @@ interface EnclosingDecl {
 }
 
 function findEnclosingDeclarations(text: string): EnclosingDecl[] {
-    const maskedText = maskCommentsAndStrings(text);
-    const decls: EnclosingDecl[] = [];
-    const declHeaderRegex = /\b([_a-zA-Z0-9]+)(?:\s+([_a-zA-Z0-9]+))?(?:\s*\[((?:[^\[\]]|\[[^\]]*\])*)\])?(?:\s*@\s*([_a-zA-Z0-9]+))?\s*(?=\{)/g;
-    let match;
-
-    while ((match = declHeaderRegex.exec(maskedText)) !== null) {
-        const kind = match[1];
-        let name = match[2];
-        const bracketContent = match[3] ? match[3].trim() : undefined;
-        const headerEnd = match.index + match[0].length;
-        const block = extractBraceBlock(text, headerEnd, maskedText);
-        if (!block) continue;
-
-        let line = 1;
-        for (let i = 0; i < match.index; i++) {
-            if (text[i] === '\n') line++;
-        }
-
-        let generatorVar: string | undefined;
-        let generatorRange: string | undefined;
-        let arraySpec: string | undefined;
-
-        if (bracketContent !== undefined) {
-            const genMatch = /^\s*([_a-zA-Z0-9]+)\s+in\s+(.+)$/.exec(bracketContent);
-            if (genMatch) {
-                generatorVar = genMatch[1];
-                generatorRange = genMatch[2].trim();
-            } else {
-                arraySpec = bracketContent;
-            }
-        }
-
-        if (!name) {
-            name = bracketContent ? `[${bracketContent}]` : `${kind}_line${line}`;
-        }
-
-        decls.push({
-            kind,
-            name,
-            start: match.index,
-            end: block.endIndex,
-            line,
-            arraySpec,
-            generatorVar,
-            generatorRange
-        });
-    }
-
-    return decls;
+    const root = parseScopeTree(text, '');
+    return root.enclosingDecls || [];
 }
 
 interface DocCacheEntry {
     version: number;
+    maskedText: string;
     scopeTree: ScopeContext;
     enclosingDecls: EnclosingDecl[];
+    allTypes: Map<string, TypeInfo>;
+    allSymbols: Map<string, LibrarySymbol>;
 }
 
 const docCache = new Map<string, DocCacheEntry>();
@@ -1351,12 +1431,18 @@ function getCachedDocData(document: TextDocument): DocCacheEntry {
         return cached;
     }
     const text = document.getText();
-    const scopeTree = parseScopeTree(text, document.uri.fsPath);
-    const enclosingDecls = findEnclosingDeclarations(text);
+    const maskedText = maskCommentsAndStrings(text);
+    const scopeTree = parseScopeTree(text, document.uri.fsPath, maskedText);
+    const enclosingDecls = scopeTree.enclosingDecls || [];
+    const allTypes = buildAllTypes(document, maskedText);
+    const allSymbols = buildAllSymbols(document, maskedText);
     const entry: DocCacheEntry = {
         version: document.version,
+        maskedText,
         scopeTree,
-        enclosingDecls
+        enclosingDecls,
+        allTypes,
+        allSymbols
     };
     docCache.set(key, entry);
     return entry;
@@ -2042,13 +2128,14 @@ function registerFallbackProviders(context: ExtensionContext) {
 
     function validateDocument(document: TextDocument) {
         if (document.languageId !== 'stride') return;
+        const docData = getCachedDocData(document);
         const text = document.getText();
-        const maskedText = maskCommentsAndStrings(text);
+        const maskedText = docData.maskedText;
         const lines = text.split(/\r?\n/);
         const diagnostics: Diagnostic[] = [];
 
-        const allTypes = getAllTypes(document);
-        const { scopeTree: rootScope } = getCachedDocData(document);
+        const allTypes = docData.allTypes;
+        const rootScope = docData.scopeTree;
 
         // 1. Check Unbalanced Braces / Brackets on MASKED text (ignores strings and comments)
         let openBraces = 0;
@@ -2121,7 +2208,7 @@ function registerFallbackProviders(context: ExtensionContext) {
             const block = extractBraceBlock(text, headerEnd, maskedText);
             if (block && isKnownType) {
                 const allowedProps = resolveAllPropertiesForType(kind, allTypes);
-                const maskedBodyStr = maskCommentsAndStrings(block.body);
+                const maskedBodyStr = block.maskedBody;
 
                 // Scan only top-level properties of this block (depth 0 of braces & brackets)
                 const propRegex = /\b([_a-zA-Z0-9]+)\s*:/g;
@@ -2198,7 +2285,7 @@ function registerFallbackProviders(context: ExtensionContext) {
             if (!sBlock) continue;
             const sLine = getLineNumber(text, sMatch.index);
             const scopeStack = buildScopeStack(rootScope, sLine);
-            const maskedStreamBody = maskCommentsAndStrings(sBlock.body);
+            const maskedStreamBody = sBlock.maskedBody;
 
             const streamStmtRegex = /([^;]+);/g;
             let stmtMatch;
@@ -2275,7 +2362,18 @@ function registerFallbackProviders(context: ExtensionContext) {
         configWatcher,
         workspace.onDidOpenTextDocument(doc => validateDocument(doc)),
         workspace.onDidChangeTextDocument(e => scheduleValidation(e.document)),
-        workspace.onDidSaveTextDocument(doc => validateDocument(doc)),
+        workspace.onDidSaveTextDocument(doc => {
+            if (doc.languageId === 'stride') {
+                docCache.clear();
+                for (const openDoc of workspace.textDocuments) {
+                    if (openDoc.languageId === 'stride') {
+                        scheduleValidation(openDoc);
+                    }
+                }
+            } else {
+                validateDocument(doc);
+            }
+        }),
         workspace.onDidCloseTextDocument(doc => {
             const key = doc.uri.toString();
             const timer = validationTimers.get(key);
@@ -2312,22 +2410,8 @@ export function activate(context: ExtensionContext) {
         effectiveStrideroot = configuredStrideroot;
     } else if (process.env.STRIDEROOT && fs.existsSync(process.env.STRIDEROOT)) {
         effectiveStrideroot = process.env.STRIDEROOT;
-    } else {
-        const externalCandidates = [
-            'C:/Users/Andres/source/repos/Stride/strideroot',
-            'C:\\Users\\Andres\\source\\repos\\Stride\\strideroot',
-            '../../Stride/strideroot',
-            '../Stride/strideroot'
-        ];
-        for (const c of externalCandidates) {
-            if (fs.existsSync(c)) {
-                effectiveStrideroot = c;
-                break;
-            }
-        }
-        if (!effectiveStrideroot && fs.existsSync(bundledStrideroot)) {
-            effectiveStrideroot = bundledStrideroot;
-        }
+    } else if (fs.existsSync(bundledStrideroot)) {
+        effectiveStrideroot = bundledStrideroot;
     }
 
     console.log(`Starting Stride Language Server: ${serverExecutable}`);
@@ -2337,7 +2421,7 @@ export function activate(context: ExtensionContext) {
 
     const serverOptions: ServerOptions = {
         command: serverExecutable,
-        args: [],
+        args: effectiveStrideroot ? [`--strideroot=${effectiveStrideroot}`] : [],
         transport: TransportKind.stdio,
         options: effectiveStrideroot ? {
             env: {
