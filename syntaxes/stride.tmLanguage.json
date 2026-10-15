@@ -146,7 +146,7 @@
 		"declarations": {
 			"patterns": [
 				{
-					"match": "\\b(_domainDefinition|platformModule|platformFunction|module|reaction|loop|state|transition|action|type)\\s+(_*[a-zA-Z0-9_]+)(?:\\s*\\[(?:[^\\[\\]]|\\[[^\\]]*\\])*\\])?(?:\\s*(@\\s*[_a-zA-Z0-9]+))?",
+					"match": "\\b(_domainDefinition|gameDefinition|domainDeclaration|platformModule|platformFunction|module|reaction|loop|state|transition|action|type)\\s+(_*[a-zA-Z0-9_]+)(?:\\s*\\[(?:[^\\[\\]]|\\[[^\\]]*\\])*\\])?(?:\\s*(@\\s*[_a-zA-Z0-9]+))?",
 					"captures": {
 						"1": {
 							"name": "storage.type.declaration.stride"
@@ -160,7 +160,7 @@
 					}
 				},
 				{
-					"match": "\\b(_domainDefinition|platformModule|platformFunction|module|reaction|loop|state|transition|action|type)\\s*(?=\\[(?:[^\\[\\]]|\\[[^\\]]*\\])*\\]\\s*\\{)",
+					"match": "\\b(_domainDefinition|gameDefinition|domainDeclaration|platformModule|platformFunction|module|reaction|loop|state|transition|action|type)\\s*(?=(?:\\[(?:[^\\[\\]]|\\[[^\\]]*\\])*\\])?(?:\\s*@[_a-zA-Z0-9]+)?\\s*\\{)",
 					"captures": {
 						"1": {
 							"name": "storage.type.declaration.stride"
@@ -172,13 +172,24 @@
 		"block-declarations": {
 			"patterns": [
 				{
-					"match": "\\b(signal|switch|trigger|mainInputPort|mainOutputPort|propertyInputPort|propertyOutputPort|typeProperty)\\s+(_*[a-zA-Z0-9_]+)(?:\\s*\\[(?:[^\\[\\]]|\\[[^\\]]*\\])*\\])?",
+					"match": "\\b(signal|switch|trigger|mainInputPort|mainOutputPort|propertyInputPort|propertyOutputPort|port|typeProperty)\\s+(_*[a-zA-Z0-9_]+)(?:\\s*\\[(?:[^\\[\\]]|\\[[^\\]]*\\])*\\])?(?:\\s*(@\\s*[_a-zA-Z0-9]+))?",
 					"captures": {
 						"1": {
-							"name": "storage.type.block.stride"
+							"name": "storage.type.declaration.stride"
 						},
 						"2": {
 							"name": "variable.other.constant.stride"
+						},
+						"3": {
+							"name": "entity.other.attribute-name.annotation.stride"
+						}
+					}
+				},
+				{
+					"match": "\\b(signal|switch|trigger|mainInputPort|mainOutputPort|propertyInputPort|propertyOutputPort|port|typeProperty)\\s*(?=(?:\\[(?:[^\\[\\]]|\\[[^\\]]*\\])*\\])?(?:\\s*@[_a-zA-Z0-9]+)?\\s*\\{)",
+					"captures": {
+						"1": {
+							"name": "storage.type.declaration.stride"
 						}
 					}
 				}
@@ -200,6 +211,14 @@
 						},
 						"4": {
 							"name": "entity.other.attribute-name.annotation.stride"
+						}
+					}
+				},
+				{
+					"match": "\\b([_a-z][a-zA-Z0-9_]*)\\s*(?=(?:\\[(?:[^\\[\\]]|\\[[^\\]]*\\])*\\])?(?:\\s*@[_a-zA-Z0-9]+)?\\s*\\{)",
+					"captures": {
+						"1": {
+							"name": "storage.type.declaration.stride"
 						}
 					}
 				}

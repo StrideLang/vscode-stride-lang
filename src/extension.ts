@@ -542,6 +542,9 @@ function parseScopeTree(text: string, filePath: string): ScopeContext {
         const ports = parsePortsFromBlock(block.body, startLine);
         for (const p of ports) {
             scope.ports.set(p.portName, p);
+            if (p.nameField) {
+                scope.ports.set(p.nameField, p);
+            }
             if (p.boundBlock) {
                 scope.boundPorts.set(p.boundBlock, p);
             }
@@ -575,9 +578,33 @@ function parseScopeTree(text: string, filePath: string): ScopeContext {
         }
         scope.parent = parentScope;
         parentScope.children.push(scope);
+        if (scope.name && !scope.name.startsWith('[') && !scope.name.includes('_line')) {
+            if (!parentScope.declarations.has(scope.name)) {
+                parentScope.declarations.set(scope.name, {
+                    name: scope.name,
+                    kind: scope.kind,
+                    line: scope.startLine,
+                    signature: `${scope.kind} ${scope.name}${scope.arraySpec ? `[${scope.arraySpec}]` : ''}`,
+                    type: scope.kind,
+                    meta: `${scope.kind} declaration`,
+                    arraySpec: scope.arraySpec,
+                    generatorVar: scope.generatorVar,
+                    generatorRange: scope.generatorRange
+                });
+            }
+        }
     }
 
     return rootScope;
+}
+
+function findScopeByName(root: ScopeContext, name: string): ScopeContext | undefined {
+    if (root.name === name) return root;
+    for (const child of root.children) {
+        const found = findScopeByName(child, name);
+        if (found) return found;
+    }
+    return undefined;
 }
 
 function buildScopeStack(rootScope: ScopeContext, targetLine: number): ScopeContext[] {
@@ -768,12 +795,14 @@ function parsePortsFromBlock(blockBody: string, baseLine: number = 1): PortInfo[
 function parseLibrarySymbols(text: string, filePath: string): LibrarySymbol[] {
     const maskedText = maskCommentsAndStrings(text);
     const symbols: LibrarySymbol[] = [];
-    const declHeaderRegex = /\b(_domainDefinition|gameDefinition|module|reaction|loop|state|transition|platformModule|platformFunction|resource|domainResource|_frameworkDescription|alias|signal|switch|trigger)\s+([_a-zA-Z0-9]+)(?:\s*\[((?:[^\[\]]|\[[^\]]*\])*)\])?(?:@\s*[_a-zA-Z0-9]+)?\s*(?=\{)/g;
+    const declHeaderRegex = /\b([_a-zA-Z0-9]+)\s+([_a-zA-Z0-9]+)(?:\s*\[((?:[^\[\]]|\[[^\]]*\])*)\])?(?:@\s*[_a-zA-Z0-9]+)?\s*(?=\{)/g;
     let match;
+    const ignoredKinds = new Set(['import', 'use', 'version', 'streamRate', 'type', 'typeProperty', 'constrainedList']);
 
     while ((match = declHeaderRegex.exec(maskedText)) !== null) {
         const kind = match[1];
         const name = match[2];
+        if (ignoredKinds.has(kind)) continue;
         const bracketContent = match[3] ? match[3].trim() : undefined;
         const headerEnd = match.index + match[0].length;
         const block = extractBraceBlock(text, headerEnd, maskedText);
@@ -1095,6 +1124,29 @@ function getAllLibrarySymbols(document: TextDocument): Map<string, LibrarySymbol
         const docParsed = parseLibrarySymbols(document.getText(), document.uri.fsPath);
         for (const s of docParsed) {
             symbolMap.set(s.name, s);
+        }
+    } catch (e) {}
+
+    // Also resolve relative imports from the document's directory
+    try {
+        if (document.uri && document.uri.scheme === 'file' && document.uri.fsPath) {
+            const docDir = path.dirname(document.uri.fsPath);
+            const importRegex = /^\s*import\s+([_a-zA-Z0-9]+)/gm;
+            let impMatch;
+            const text = document.getText();
+            while ((impMatch = importRegex.exec(text)) !== null) {
+                const modName = impMatch[1];
+                const candidate = path.join(docDir, `${modName}.stride`);
+                if (fs.existsSync(candidate)) {
+                    try {
+                        const content = fs.readFileSync(candidate, 'utf8');
+                        const parsed = parseLibrarySymbols(content, candidate);
+                        for (const s of parsed) {
+                            symbolMap.set(s.name, s);
+                        }
+                    } catch (e) {}
+                }
+            }
         }
     } catch (e) {}
 
@@ -1610,8 +1662,92 @@ function registerFallbackProviders(context: ExtensionContext) {
             const isFollowedByColon = /^\s*:/.test(afterWord);
             const enclosingDecl = getCachedInnermostEnclosingDeclaration(document, charOffset);
 
-            // 1. If followed by a colon, resolve property FIRST
+            // 1. If followed by a colon, check if inside a function/action invocation first (e.g. Place(supply: ...))
             if (isFollowedByColon) {
+                const beforeWord = lineText.substring(0, wordRange.start.character);
+                let callMatch = /([_a-zA-Z0-9]+)\s*(?:\[[^\]]*\])?\s*\([^()]*$/.exec(beforeWord);
+                if (!callMatch) {
+                    let combined = beforeWord;
+                    for (let prev = position.line - 1; prev >= Math.max(0, position.line - 15); prev--) {
+                        const pText = document.lineAt(prev).text;
+                        combined = pText + ' ' + combined;
+                        const m = /([_a-zA-Z0-9]+)\s*(?:\[[^\]]*\])?\s*\([^()]*$/.exec(combined);
+                        if (m) {
+                            callMatch = m;
+                            break;
+                        }
+                        if (pText.includes(';')) break;
+                    }
+                }
+
+                if (callMatch) {
+                    const funcName = callMatch[1];
+                    const allSymbols = getAllLibrarySymbols(document);
+                    const funcSym = allSymbols.get(funcName);
+                    const { scopeTree: rootScope } = getCachedDocData(document);
+                    const targetScope = findScopeByName(rootScope, funcName);
+
+                    let foundPort: PortInfo | undefined;
+                    let targetFilePath: string = document.uri.fsPath;
+                    let enclosingName: string = funcName;
+                    let boundDecl: ScopeDeclaration | undefined;
+
+                    if (targetScope) {
+                        for (const p of targetScope.ports.values()) {
+                            if (p.nameField === word || p.portName === word || p.boundBlock === word ||
+                                (p.nameField && p.nameField.toLowerCase() === word.toLowerCase()) ||
+                                p.portName.toLowerCase() === word.toLowerCase()) {
+                                foundPort = p;
+                                enclosingName = `${targetScope.kind} ${targetScope.name}`;
+                                targetFilePath = document.uri.fsPath;
+                                if (p.boundBlock) {
+                                    boundDecl = targetScope.declarations.get(p.boundBlock);
+                                }
+                                break;
+                            }
+                        }
+                    }
+
+                    if (!foundPort && funcSym && funcSym.ports) {
+                        for (const p of funcSym.ports) {
+                            if (p.nameField === word || p.portName === word || p.boundBlock === word ||
+                                (p.nameField && p.nameField.toLowerCase() === word.toLowerCase()) ||
+                                p.portName.toLowerCase() === word.toLowerCase()) {
+                                foundPort = p;
+                                enclosingName = `${funcSym.kind} ${funcSym.name}`;
+                                targetFilePath = funcSym.filePath;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (foundPort) {
+                        let header = `${foundPort.portType} ${foundPort.portName}`;
+                        if (foundPort.nameField && foundPort.nameField !== foundPort.portName) {
+                            header += ` (name: "${foundPort.nameField}")`;
+                        }
+                        let body = `**Port Parameter**: \`${foundPort.nameField || foundPort.portName}\`\n\n`;
+                        const portTypeName = foundPort.types || boundDecl?.type || boundDecl?.kind || '_IntType';
+                        body += `- **Type**: \`${portTypeName}\`\n`;
+                        if (foundPort.boundBlock) {
+                            body += `- **Bound Block**: \`${foundPort.boundBlock}\``;
+                            if (boundDecl?.type) {
+                                body += ` (\`${boundDecl.kind} ${boundDecl.name} { type: ${boundDecl.type} }\`)`;
+                            }
+                            body += `\n`;
+                        }
+                        if (foundPort.defaultVal !== undefined) {
+                            body += `- **Default**: \`${foundPort.defaultVal}\`\n`;
+                        }
+                        if (foundPort.meta) {
+                            body += `\n*${foundPort.meta}*\n\n`;
+                        }
+                        body += `\n📍 Parameter port for \`${enclosingName}\` in ${formatClickableLink(targetFilePath, foundPort.line || 1)}`;
+                        return createCompactHover(header, body);
+                    }
+                }
+
+                // Fallback to enclosing block declaration property
                 const propHover = renderPropertyHover(word, allTypes, enclosingDecl?.kind);
                 if (propHover) {
                     return new Hover(propHover);
@@ -1753,8 +1889,49 @@ function registerFallbackProviders(context: ExtensionContext) {
             const isFollowedByColon = /^\s*:/.test(afterWord);
             const enclosingDecl = getCachedInnermostEnclosingDeclaration(document, charOffset);
 
-            // 1. If followed by a colon, jump to property declaration
+            // 1. If followed by a colon, check if inside a function/action invocation first
             if (isFollowedByColon) {
+                const beforeWord = lineText.substring(0, wordRange.start.character);
+                let callMatch = /([_a-zA-Z0-9]+)\s*(?:\[[^\]]*\])?\s*\([^()]*$/.exec(beforeWord);
+                if (!callMatch) {
+                    let combined = beforeWord;
+                    for (let prev = position.line - 1; prev >= Math.max(0, position.line - 15); prev--) {
+                        const pText = document.lineAt(prev).text;
+                        combined = pText + ' ' + combined;
+                        const m = /([_a-zA-Z0-9]+)\s*(?:\[[^\]]*\])?\s*\([^()]*$/.exec(combined);
+                        if (m) {
+                            callMatch = m;
+                            break;
+                        }
+                        if (pText.includes(';')) break;
+                    }
+                }
+                if (callMatch) {
+                    const funcName = callMatch[1];
+                    const { scopeTree: rootScope } = getCachedDocData(document);
+                    const targetScope = findScopeByName(rootScope, funcName);
+                    if (targetScope) {
+                        for (const p of targetScope.ports.values()) {
+                            if (p.nameField === word || p.portName === word || p.boundBlock === word ||
+                                (p.nameField && p.nameField.toLowerCase() === word.toLowerCase()) ||
+                                p.portName.toLowerCase() === word.toLowerCase()) {
+                                return new Location(document.uri, new Position(Math.max(0, (p.line || 1) - 1), 0));
+                            }
+                        }
+                    }
+                    const allSymbols = getAllLibrarySymbols(document);
+                    const funcSym = allSymbols.get(funcName);
+                    if (funcSym && funcSym.ports) {
+                        const port = funcSym.ports.find(p => p.nameField === word || p.portName === word || p.boundBlock === word ||
+                            (p.nameField && p.nameField.toLowerCase() === word.toLowerCase()) ||
+                            p.portName.toLowerCase() === word.toLowerCase());
+                        if (port && funcSym.filePath) {
+                            return new Location(Uri.file(funcSym.filePath), new Position(Math.max(0, (port.line || 1) - 1), 0));
+                        }
+                    }
+                }
+
+                // Fallback to enclosing block declaration property
                 const propMatch = findPropertyDeclaration(word, allTypes, enclosingDecl?.kind);
                 if (propMatch && propMatch.prop.filePath) {
                     return new Location(Uri.file(propMatch.prop.filePath), new Position(Math.max(0, (propMatch.prop.line || 1) - 1), 0));
@@ -2013,7 +2190,7 @@ function registerFallbackProviders(context: ExtensionContext) {
         checkDuplicateScope(rootScope);
 
         // 4. Validate Undeclared Symbols in Streams (ignoring string literals and comments)
-        const streamBlockRegex = /\bstreams\s*:\s*\[/g;
+        const streamBlockRegex = /\b(?:streams|onTransition)\s*:\s*\[/g;
         let sMatch;
         while ((sMatch = streamBlockRegex.exec(maskedText)) !== null) {
             const sStart = sMatch.index + sMatch[0].length - 1;
@@ -2033,6 +2210,11 @@ function registerFallbackProviders(context: ExtensionContext) {
                     const tok = tokMatch[1];
                     if (/^\d+$/.test(tok) || tok === 'on' || tok === 'off' || tok === 'none' || tok === 'true' || tok === 'false') continue;
                     if (tok === 'llvm' || tok === 'icmp' || tok === 'fcmp' || tok === 'eq' || tok === 'ne' || tok === 'sgt' || tok === 'sge' || tok === 'slt' || tok === 'sle') continue;
+
+                    // If token is immediately followed by a colon (e.g. `entityType:`, `targetSupply:`, `count:`),
+                    // it is a named parameter / port key in a function or reaction invocation, not an undeclared symbol.
+                    const afterTok = stmtText.slice(tokMatch.index + tok.length);
+                    if (/^\s*:/.test(afterTok)) continue;
 
                     const decl = findDeclarationInScopeStack(tok, scopeStack);
                     const isLibSym = getAllLibrarySymbols(document).has(tok);

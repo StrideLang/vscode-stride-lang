@@ -9,6 +9,13 @@ type _TransitionType {
 			meta: "The event or signal that triggers this transition."
 		},
 		typeProperty {
+			name: "label"
+			types: [ _StringType ]
+			default: ""
+			required: off
+			meta: "The label or description for this transition."
+		},
+		typeProperty {
 			name: "guard"
 			types: [ _Streamable, _NoneLiteral ]
 			default: none
