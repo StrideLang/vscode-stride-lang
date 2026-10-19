@@ -286,7 +286,7 @@
 					"match": "\\b(_*[a-zA-Z0-9_]+)\\s*(:)(?!:)",
 					"captures": {
 						"1": {
-							"name": "entity.other.attribute-name.stride"
+							"name": "keyword.control.property.stride"
 						},
 						"2": {
 							"name": "punctuation.separator.key-value.stride"
