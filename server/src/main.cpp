@@ -746,19 +746,65 @@ void handleDefinition(const std::string &id, const std::string &uri, int line, i
     auto it = openDocuments.find(uri);
     std::string result = "null";
 
-    if (it != openDocuments.end() && it->second.tree) {
+    if (it != openDocuments.end()) {
+        std::string currentPath = uriToPath(uri);
+        std::filesystem::path currentFilePath(currentPath);
+        std::filesystem::path currentDir = currentFilePath.parent_path();
+
+        std::string lineText = "";
+        std::istringstream iss(it->second.text);
+        std::string curL;
+        int curLineIdx = 0;
+        while (std::getline(iss, curL)) {
+            if (curLineIdx == line) {
+                lineText = curL;
+                break;
+            }
+            curLineIdx++;
+        }
+
         std::string token = getWordAtPosition(it->second.text, line, character);
         if (!token.empty()) {
-            ScopeStack scopeStack = buildScopeStackForPosition(it->second.tree, line + 1);
-            auto decl = ASTQuery::findDeclarationByName(token, scopeStack, it->second.tree);
-            if (decl) {
-                int declLine = (decl->getLine() > 0) ? (decl->getLine() - 1) : 0;
-                std::ostringstream r;
-                r << "{";
-                r << "\"uri\":\"" << escapeJson(uri) << "\",";
-                r << "\"range\":{\"start\":{\"line\":" << declLine << ",\"character\":0},\"end\":{\"line\":" << declLine << ",\"character\":100}}";
-                r << "}";
-                result = r.str();
+            size_t impPos = lineText.find("import");
+            if (impPos == std::string::npos) impPos = lineText.find("use");
+            if (impPos != std::string::npos && token != "import" && token != "use" && token != "as" && token != "version") {
+                std::string sRoot = findStrideRoot("");
+                std::vector<std::filesystem::path> candidates = {
+                    currentDir / (token + ".stride"),
+                    currentDir / token,
+                    currentDir / token / (token + ".stride")
+                };
+                if (!sRoot.empty()) {
+                    candidates.push_back(std::filesystem::path(sRoot) / (token + ".stride"));
+                    candidates.push_back(std::filesystem::path(sRoot) / "library" / (token + ".stride"));
+                    candidates.push_back(std::filesystem::path(sRoot) / "library" / "1.0" / (token + ".stride"));
+                }
+                for (const auto &cand : candidates) {
+                    if (std::filesystem::exists(cand) && std::filesystem::is_regular_file(cand)) {
+                        std::string targetUri = "file:///" + cand.generic_string();
+                        std::ostringstream r;
+                        r << "{";
+                        r << "\"uri\":\"" << escapeJson(targetUri) << "\",";
+                        r << "\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":0,\"character\":0}}";
+                        r << "}";
+                        result = r.str();
+                        break;
+                    }
+                }
+            }
+
+            if (result == "null" && it->second.tree) {
+                ScopeStack scopeStack = buildScopeStackForPosition(it->second.tree, line + 1);
+                auto decl = ASTQuery::findDeclarationByName(token, scopeStack, it->second.tree);
+                if (decl) {
+                    int declLine = (decl->getLine() > 0) ? (decl->getLine() - 1) : 0;
+                    std::ostringstream r;
+                    r << "{";
+                    r << "\"uri\":\"" << escapeJson(uri) << "\",";
+                    r << "\"range\":{\"start\":{\"line\":" << declLine << ",\"character\":0},\"end\":{\"line\":" << declLine << ",\"character\":100}}";
+                    r << "}";
+                    result = r.str();
+                }
             }
         }
     }

@@ -22,7 +22,9 @@ import {
     Uri,
     Diagnostic,
     DiagnosticSeverity,
-    DiagnosticCollection
+    DiagnosticCollection,
+    DocumentLink,
+    DocumentLinkProvider
 } from 'vscode';
 import {
     LanguageClient,
@@ -1165,6 +1167,125 @@ function getStrideFileContent(filePath: string): string | null {
     return null;
 }
 
+function resolveImportFile(importTarget: string, documentOrPath: TextDocument | string): string | undefined {
+    const cleanTarget = importTarget.replace(/['"]/g, '').trim();
+    if (!cleanTarget) return undefined;
+
+    // Check if cleanTarget is an absolute path that exists
+    if (path.isAbsolute(cleanTarget)) {
+        if (fs.existsSync(cleanTarget) && fs.statSync(cleanTarget).isFile()) return cleanTarget;
+        if (fs.existsSync(cleanTarget + '.stride') && fs.statSync(cleanTarget + '.stride').isFile()) return cleanTarget + '.stride';
+    }
+
+    const currentPath = typeof documentOrPath === 'string'
+        ? path.normalize(documentOrPath)
+        : (documentOrPath.uri && documentOrPath.uri.scheme === 'file' && documentOrPath.uri.fsPath)
+            ? path.normalize(documentOrPath.uri.fsPath)
+            : undefined;
+    const docDir = currentPath ? path.dirname(currentPath) : undefined;
+    const subPath = cleanTarget.replace(/\./g, path.sep);
+
+    if (docDir) {
+        // 1. Direct match in current directory
+        const candidates = [
+            path.normalize(path.join(docDir, `${cleanTarget}.stride`)),
+            path.normalize(path.join(docDir, cleanTarget)),
+            path.normalize(path.join(docDir, cleanTarget, `${cleanTarget}.stride`)),
+            path.normalize(path.join(docDir, `${subPath}.stride`)),
+            path.normalize(path.join(docDir, subPath, `${path.basename(subPath)}.stride`))
+        ];
+
+        for (const candidate of candidates) {
+            try {
+                if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+                    return candidate;
+                }
+            } catch (e) {}
+        }
+
+        // 2. Immediate subdirectories of current directory
+        try {
+            const entries = fs.readdirSync(docDir, { withFileTypes: true });
+            for (const entry of entries) {
+                if (entry.isDirectory() && entry.name !== '.git' && entry.name !== 'node_modules' && entry.name !== 'build' && entry.name !== 'out') {
+                    const subDir = path.join(docDir, entry.name);
+                    const subCandidates = [
+                        path.normalize(path.join(subDir, `${cleanTarget}.stride`)),
+                        path.normalize(path.join(subDir, cleanTarget)),
+                        path.normalize(path.join(subDir, cleanTarget, `${cleanTarget}.stride`)),
+                        path.normalize(path.join(subDir, `${subPath}.stride`))
+                    ];
+                    for (const candidate of subCandidates) {
+                        if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+                            return candidate;
+                        }
+                    }
+                }
+            }
+        } catch (e) {}
+    }
+
+    // 3. Workspace folders
+    if (workspace.workspaceFolders) {
+        for (const wf of workspace.workspaceFolders) {
+            const wfDir = wf.uri.fsPath;
+            const wfCandidates = [
+                path.normalize(path.join(wfDir, `${cleanTarget}.stride`)),
+                path.normalize(path.join(wfDir, cleanTarget)),
+                path.normalize(path.join(wfDir, cleanTarget, `${cleanTarget}.stride`)),
+                path.normalize(path.join(wfDir, `${subPath}.stride`))
+            ];
+            for (const candidate of wfCandidates) {
+                try {
+                    if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+                        return candidate;
+                    }
+                } catch (e) {}
+            }
+        }
+    }
+
+    // 4. Check indexed library files from getLibraryFiles()
+    const libFiles = getLibraryFiles();
+    const targetBase = path.basename(cleanTarget, '.stride').toLowerCase();
+    for (const libPath of libFiles) {
+        const fileBase = path.basename(libPath, '.stride').toLowerCase();
+        if (fileBase === targetBase) {
+            return libPath;
+        }
+    }
+
+    const normalizedSubPath = subPath.toLowerCase() + '.stride';
+    for (const libPath of libFiles) {
+        if (path.normalize(libPath).toLowerCase().endsWith(normalizedSubPath)) {
+            return libPath;
+        }
+    }
+
+    // 5. Check all Stride root directories
+    for (const rootDir of getStrideRootDirs()) {
+        const rootCandidates = [
+            path.normalize(path.join(rootDir, `${cleanTarget}.stride`)),
+            path.normalize(path.join(rootDir, cleanTarget)),
+            path.normalize(path.join(rootDir, cleanTarget, `${cleanTarget}.stride`)),
+            path.normalize(path.join(rootDir, `${subPath}.stride`)),
+            path.normalize(path.join(rootDir, 'library', `${cleanTarget}.stride`)),
+            path.normalize(path.join(rootDir, 'library', '1.0', `${cleanTarget}.stride`)),
+            path.normalize(path.join(rootDir, 'library', `${subPath}.stride`)),
+            path.normalize(path.join(rootDir, 'library', '1.0', `${subPath}.stride`))
+        ];
+        for (const candidate of rootCandidates) {
+            try {
+                if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+                    return candidate;
+                }
+            } catch (e) {}
+        }
+    }
+
+    return undefined;
+}
+
 function getRelatedStrideFiles(document: TextDocument): string[] {
     const relatedFiles = new Set<string>();
     if (!document.uri || document.uri.scheme !== 'file' || !document.uri.fsPath) {
@@ -1173,8 +1294,7 @@ function getRelatedStrideFiles(document: TextDocument): string[] {
     const currentPath = path.normalize(document.uri.fsPath);
     const docDir = path.dirname(currentPath);
 
-    // 1. Sibling .stride files and directory names in the current directory
-    const subDirs: string[] = [];
+    // 1. Sibling .stride files in the current directory
     try {
         if (fs.existsSync(docDir)) {
             const entries = fs.readdirSync(docDir, { withFileTypes: true });
@@ -1184,24 +1304,12 @@ function getRelatedStrideFiles(document: TextDocument): string[] {
                     if (fullPath !== currentPath) {
                         relatedFiles.add(fullPath);
                     }
-                } else if (entry.isDirectory()) {
-                    if (entry.name !== '.git' && entry.name !== 'node_modules' && entry.name !== 'build' && entry.name !== 'out') {
-                        subDirs.push(path.normalize(path.join(docDir, entry.name)));
-                    }
                 }
             }
         }
     } catch (e) {}
 
-    // 2. Search directories for imports: strictly current directory, directory names in current directory, and stride root
-    const strideRootDirs = getStrideRootDirs();
-    const searchDirs = [
-        docDir,
-        ...subDirs,
-        ...strideRootDirs
-    ];
-
-    // Explicitly imported modules: `import <ModuleName>` (with transitive resolution)
+    // 2. Explicitly imported modules: `import <ModuleName>` (with transitive resolution)
     const queue: string[] = [currentPath, ...relatedFiles];
     const visited = new Set<string>([currentPath]);
 
@@ -1213,27 +1321,15 @@ function getRelatedStrideFiles(document: TextDocument): string[] {
         try {
             const content = getStrideFileContent(filePath);
             if (!content) continue;
-            const importRegex = /^\s*import\s+([_a-zA-Z0-9]+)/gm;
+            const importRegex = /^\s*(?:import|use)\s+(?:(["'])(.*?)\1|([_a-zA-Z0-9.]+))/gm;
             let impMatch;
             while ((impMatch = importRegex.exec(content)) !== null) {
-                const modName = impMatch[1];
-                for (const dir of searchDirs) {
-                    let candidate = path.normalize(path.join(dir, `${modName}.stride`));
-                    if (candidate !== currentPath && fs.existsSync(candidate)) {
-                        if (!relatedFiles.has(candidate)) {
-                            relatedFiles.add(candidate);
-                            queue.push(candidate);
-                        }
-                        break;
-                    }
-                    candidate = path.normalize(path.join(dir, modName, `${modName}.stride`));
-                    if (candidate !== currentPath && fs.existsSync(candidate)) {
-                        if (!relatedFiles.has(candidate)) {
-                            relatedFiles.add(candidate);
-                            queue.push(candidate);
-                        }
-                        break;
-                    }
+                const modName = impMatch[2] || impMatch[3];
+                if (!modName) continue;
+                const candidate = resolveImportFile(modName, filePath);
+                if (candidate && candidate !== currentPath && !relatedFiles.has(candidate)) {
+                    relatedFiles.add(candidate);
+                    queue.push(candidate);
                 }
             }
         } catch (e) {}
@@ -2028,24 +2124,26 @@ function registerFallbackProviders(context: ExtensionContext) {
                 return new Hover(propHover);
             }
 
-            // 5. Check for Import statements (e.g. import GameFunctions -> link to GameFunctions.stride)
-            const importMatch = /^\s*import\s+([_a-zA-Z0-9]+)/.exec(lineText);
-            if (importMatch && importMatch[1] === word) {
-                for (const libPath of getLibraryFiles()) {
-                    if (path.basename(libPath, '.stride') === word || path.basename(libPath) === word) {
-                        const content = fs.readFileSync(libPath, 'utf8');
-                        const decls = parseLibrarySymbols(content, libPath);
-                        let body = `📍 **Library File**: ${formatClickableLink(libPath, 1)}\n\n`;
+            // 5. Check for Import or Use statements (e.g. import GameFunctions -> link to GameFunctions.stride)
+            const importMatch = /^\s*(?:import|use)\s+(?:(["'])(.*?)\1|([_a-zA-Z0-9.]+))(?:\s+as\s+([_a-zA-Z0-9]+))?/i.exec(lineText);
+            if (importMatch) {
+                const importTarget = importMatch[2] || importMatch[3];
+                if (importTarget && (importTarget === word || importTarget.includes(word) || word === 'import' || word === 'use')) {
+                    const targetFile = resolveImportFile(importTarget, document);
+                    if (targetFile && fs.existsSync(targetFile)) {
+                        const content = fs.readFileSync(targetFile, 'utf8');
+                        const decls = parseLibrarySymbols(content, targetFile);
+                        let body = `📍 **File**: ${formatClickableLink(targetFile, 1)}\n\n`;
                         if (decls.length > 0) {
                             body += `**Exported Declarations**:\n`;
                             for (const d of decls.slice(0, 15)) {
-                                body += `- \`${d.signature}\` (${formatClickableLink(libPath, d.line)})\n`;
+                                body += `- \`${d.signature}\` (${formatClickableLink(targetFile, d.line)})\n`;
                             }
                             if (decls.length > 15) {
                                 body += `*... and ${decls.length - 15} more declarations.*\n`;
                             }
                         }
-                        return createCompactHover(`import ${word}`, body);
+                        return createCompactHover(`import ${importTarget}`, body);
                     }
                 }
             }
@@ -2129,6 +2227,20 @@ function registerFallbackProviders(context: ExtensionContext) {
 
     const definitionProvider: DefinitionProvider = {
         provideDefinition(document: TextDocument, position: Position): Location | undefined {
+            const lineText = document.lineAt(position.line).text;
+
+            // 0. Check for Import or Use statements (e.g. clicking on GameFunctions in import GameFunctions -> jump to GameFunctions.stride)
+            const importMatch = /^\s*(?:import|use)\s+(?:(["'])(.*?)\1|([_a-zA-Z0-9.]+))(?:\s+as\s+([_a-zA-Z0-9]+))?/i.exec(lineText);
+            if (importMatch) {
+                const importTarget = importMatch[2] || importMatch[3];
+                if (importTarget) {
+                    const targetFile = resolveImportFile(importTarget, document);
+                    if (targetFile) {
+                        return new Location(Uri.file(targetFile), new Position(0, 0));
+                    }
+                }
+            }
+
             const charOffset = document.offsetAt(position);
             if (isOffsetInCommentOrString(document.getText(), charOffset)) {
                 return undefined;
@@ -2138,8 +2250,15 @@ function registerFallbackProviders(context: ExtensionContext) {
             if (!wordRange) return undefined;
             const word = document.getText(wordRange);
 
+            // Also check if word itself is an import target (e.g. if regex didn't match full line)
+            if (/^\s*(?:import|use)\b/.test(lineText) && word !== 'import' && word !== 'use' && word !== 'as') {
+                const targetFile = resolveImportFile(word, document);
+                if (targetFile) {
+                    return new Location(Uri.file(targetFile), new Position(0, 0));
+                }
+            }
+
             const allTypes = getAllTypes(document);
-            const lineText = document.lineAt(position.line).text;
             const afterWord = lineText.substring(wordRange.end.character);
             const isFollowedByColon = /^\s*:/.test(afterWord);
             const enclosingDecl = getCachedInnermostEnclosingDeclaration(document, charOffset);
@@ -2222,6 +2341,37 @@ function registerFallbackProviders(context: ExtensionContext) {
             }
 
             return undefined;
+        }
+    };
+
+    const documentLinkProvider: DocumentLinkProvider = {
+        provideDocumentLinks(document: TextDocument): DocumentLink[] {
+            const links: DocumentLink[] = [];
+            const text = document.getText();
+            const lines = text.split('\n');
+            const importRegex = /^\s*(?:import|use)\s+(?:(["'])(.*?)\1|([_a-zA-Z0-9.]+))/;
+
+            for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+                const line = lines[lineIndex];
+                const match = importRegex.exec(line);
+                if (!match) continue;
+
+                const importTarget = match[2] || match[3];
+                if (!importTarget) continue;
+
+                const targetFile = resolveImportFile(importTarget, document);
+                if (targetFile) {
+                    const startChar = line.indexOf(importTarget);
+                    if (startChar >= 0) {
+                        const startPos = new Position(lineIndex, startChar);
+                        const endPos = new Position(lineIndex, startChar + importTarget.length);
+                        const link = new DocumentLink(new Range(startPos, endPos), Uri.file(targetFile));
+                        link.tooltip = `Follow import link (opens ${path.basename(targetFile)})`;
+                        links.push(link);
+                    }
+                }
+            }
+            return links;
         }
     };
 
@@ -2556,6 +2706,7 @@ function registerFallbackProviders(context: ExtensionContext) {
         languages.registerDocumentSymbolProvider({ scheme: 'file', language: 'stride' }, symbolProvider),
         languages.registerHoverProvider({ scheme: 'file', language: 'stride' }, hoverProvider),
         languages.registerDefinitionProvider({ scheme: 'file', language: 'stride' }, definitionProvider),
+        languages.registerDocumentLinkProvider({ scheme: 'file', language: 'stride' }, documentLinkProvider),
         languages.registerCompletionItemProvider({ scheme: 'file', language: 'stride' }, completionProvider, '.', ':', '>')
     );
 }
