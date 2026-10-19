@@ -49,6 +49,34 @@
                 "path": "./syntaxes/stride.tmLanguage.json"
             }
         ],
+        "semanticTokenScopes": [
+            {
+                "language": "stride",
+                "scopes": {
+                    "type.defaultLibrary": [
+                        "support.type.primitive.stride"
+                    ],
+                    "type": [
+                        "entity.name.type.class.stride"
+                    ],
+                    "class": [
+                        "entity.name.type.class.stride"
+                    ],
+                    "function.defaultLibrary": [
+                        "support.function.stride"
+                    ],
+                    "function": [
+                        "entity.name.function.stride"
+                    ],
+                    "variable": [
+                        "variable.other.constant.stride"
+                    ],
+                    "property": [
+                        "entity.other.attribute-name.stride"
+                    ]
+                }
+            }
+        ],
         "snippets": [
             {
                 "language": "stride",

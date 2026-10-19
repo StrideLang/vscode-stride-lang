@@ -24,7 +24,11 @@ import {
     DiagnosticSeverity,
     DiagnosticCollection,
     DocumentLink,
-    DocumentLinkProvider
+    DocumentLinkProvider,
+    DocumentSemanticTokensProvider,
+    SemanticTokens,
+    SemanticTokensLegend,
+    SemanticTokensBuilder
 } from 'vscode';
 import {
     LanguageClient,
@@ -1107,11 +1111,31 @@ function parseTypesFromText(text: string, filePath?: string, preMaskedText?: str
     return types;
 }
 
+function syncGrammarWithLibrary(standardLibTypes: Set<string>): void {
+    if (!extensionContext) return;
+    try {
+        const grammarPath = extensionContext.asAbsolutePath(path.join('syntaxes', 'stride.tmLanguage.json'));
+        if (!fs.existsSync(grammarPath)) return;
+        const content = fs.readFileSync(grammarPath, 'utf8');
+        const grammar = JSON.parse(content);
+        if (grammar.repository && grammar.repository['builtin-types'] && grammar.repository['builtin-types'].patterns && grammar.repository['builtin-types'].patterns[0]) {
+            const sortedTypes = Array.from(standardLibTypes).filter(t => /^_[A-Z][a-zA-Z0-9_]*$/.test(t)).sort();
+            if (sortedTypes.length === 0) return;
+            const newRegex = `\\b(${sortedTypes.join('|')})\\b`;
+            if (grammar.repository['builtin-types'].patterns[0].match !== newRegex) {
+                grammar.repository['builtin-types'].patterns[0].match = newRegex;
+                fs.writeFileSync(grammarPath, JSON.stringify(grammar, null, '\t') + '\n', 'utf8');
+            }
+        }
+    } catch (e) {}
+}
+
 function getLibraryTypes(): Map<string, TypeInfo> {
     if (cachedLibraryTypes) {
         return cachedLibraryTypes;
     }
     const typeMap = new Map<string, TypeInfo>();
+    const standardLibTypes = new Set<string>(Object.keys(BUILTIN_SCALARS));
 
     for (const schemaPath of getLibraryFiles()) {
         try {
@@ -1120,6 +1144,10 @@ function getLibraryTypes(): Map<string, TypeInfo> {
             const isStandardLib = schemaPath.includes('strideroot') || schemaPath.includes('library');
             const isBundledLib = extensionContext && schemaPath.startsWith(extensionContext.extensionPath);
             for (const t of parsed) {
+                if (isStandardLib) {
+                    standardLibTypes.add(t.name);
+                    if (t.typeName) standardLibTypes.add(t.typeName);
+                }
                 const existing = typeMap.get(t.name) || (t.typeName ? typeMap.get(t.typeName) : undefined);
                 // Bundled fallback definitions must never override any existing definitions
                 if (existing && isBundledLib) {
@@ -1149,6 +1177,7 @@ function getLibraryTypes(): Map<string, TypeInfo> {
         }
     }
 
+    syncGrammarWithLibrary(standardLibTypes);
     cachedLibraryTypes = typeMap;
     return typeMap;
 }
@@ -2375,6 +2404,117 @@ function registerFallbackProviders(context: ExtensionContext) {
         }
     };
 
+    const semanticTokenTypes = ['type', 'class', 'function', 'variable', 'property'];
+    const semanticTokenModifiers = ['defaultLibrary', 'declaration'];
+    const semanticTokensLegend = new SemanticTokensLegend(semanticTokenTypes, semanticTokenModifiers);
+
+    function isStandardLibraryPath(filePath?: string): boolean {
+        if (!filePath) return false;
+        const norm = path.normalize(filePath).toLowerCase();
+        const striderootDirs = getStrideRootDirs().map(d => path.normalize(d).toLowerCase());
+        for (const d of striderootDirs) {
+            if (norm.startsWith(d)) return true;
+        }
+        return norm.includes('strideroot') || (norm.includes('library') && !norm.includes('libgame'));
+    }
+
+    const semanticTokensProvider: DocumentSemanticTokensProvider = {
+        provideDocumentSemanticTokens(document: TextDocument): SemanticTokens {
+            const builder = new SemanticTokensBuilder(semanticTokensLegend);
+            const text = document.getText();
+            const maskedText = maskCommentsAndStrings(text);
+            const lines = text.split('\n');
+            const maskedLines = maskedText.split('\n');
+
+            const allTypes = getAllTypes(document);
+            const allSymbols = getAllLibrarySymbols(document);
+            const libTypes = getLibraryTypes();
+
+            const tokenRegex = /\b(_*[a-zA-Z0-9]+)\b/g;
+            const ignoredWords = new Set([
+                'import', 'use', 'version', 'with', 'as', 'for', 'in', 'streamRate',
+                'and', 'or', 'not', 'on', 'off', 'none', 'true', 'false',
+                'signal', 'switch', 'trigger', 'mainInputPort', 'mainOutputPort',
+                'propertyInputPort', 'propertyOutputPort', 'port', 'typeProperty',
+                'module', 'reaction', 'loop', 'state', 'transition', 'action', 'type',
+                '_domainDefinition', 'gameDefinition', 'domainDeclaration', 'platformModule'
+            ]);
+
+            for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+                const lineText = lines[lineIndex];
+                const maskedLine = maskedLines[lineIndex];
+                if (!maskedLine.trim()) continue;
+
+                let match;
+                tokenRegex.lastIndex = 0;
+                while ((match = tokenRegex.exec(maskedLine)) !== null) {
+                    const token = match[1];
+                    const charIndex = match.index;
+                    const tokenLen = token.length;
+
+                    // Skip numbers
+                    if (/^\d+$/.test(token)) {
+                        continue;
+                    }
+
+                    // Check if followed by colon (property key)
+                    // AGENTS.md Section 5 Invariant: If a token is followed by a colon (`:`), it is a property key
+                    const afterToken = lineText.substring(charIndex + tokenLen);
+                    const isFollowedByColon = /^\s*:(?!:)/.test(afterToken);
+
+                    if (isFollowedByColon) {
+                        builder.push(lineIndex, charIndex, tokenLen, 4, 0); // tokenType 4 = 'property'
+                        continue;
+                    }
+
+                    // Skip keywords when not followed by colon
+                    if (ignoredWords.has(token)) {
+                        continue;
+                    }
+
+                    // 1. Built-in Primitive Scalars
+                    if (BUILTIN_SCALARS[token]) {
+                        builder.push(lineIndex, charIndex, tokenLen, 0, 1); // tokenType 0 = 'type', modifier bit 0 = 'defaultLibrary' (Green)
+                        continue;
+                    }
+
+                    // 2. Known Types from schema
+                    const targetKind = TYPE_ALIASES[token] || token;
+                    const tInfo = allTypes.get(token) || allTypes.get(targetKind);
+                    if (tInfo) {
+                        const isLibType = libTypes.has(tInfo.name) && isStandardLibraryPath(libTypes.get(tInfo.name)?.filePath || tInfo.filePath);
+                        if (isLibType) {
+                            // Standard library primitive/type -> support.type.primitive.stride (Green)
+                            builder.push(lineIndex, charIndex, tokenLen, 0, 1); // tokenType 0 = 'type', modifier bit 0 = 'defaultLibrary'
+                        } else {
+                            // Framework or local import type -> entity.name.type.class.stride (Different Color)
+                            builder.push(lineIndex, charIndex, tokenLen, 1, 0); // tokenType 1 = 'class'
+                        }
+                        continue;
+                    }
+
+                    // 3. Known Symbols (framework descriptions, platform data types, functions, reactions, signals, etc.)
+                    const sym = allSymbols.get(token);
+                    if (sym) {
+                        if (sym.kind === 'frameworkDataType') {
+                            builder.push(lineIndex, charIndex, tokenLen, 0, 1); // type.defaultLibrary (Green)
+                        } else if (sym.kind === '_frameworkDescription' || sym.kind === 'gameDefinition' || sym.kind === '_domainDefinition' || sym.kind === 'domainDeclaration') {
+                            builder.push(lineIndex, charIndex, tokenLen, 1, 0); // class (Different Color)
+                        } else if (sym.kind === 'signal' || sym.kind === 'switch') {
+                            builder.push(lineIndex, charIndex, tokenLen, 3, 0); // tokenType 3 = 'variable'
+                        } else {
+                            const isLibSym = isStandardLibraryPath(sym.filePath);
+                            builder.push(lineIndex, charIndex, tokenLen, 2, isLibSym ? 1 : 0); // tokenType 2 = 'function'
+                        }
+                        continue;
+                    }
+                }
+            }
+
+            return builder.build();
+        }
+    };
+
     const completionProvider: CompletionItemProvider = {
         provideCompletionItems(document: TextDocument, position: Position): CompletionItem[] | undefined {
             const charOffset = document.offsetAt(position);
@@ -2707,6 +2847,11 @@ function registerFallbackProviders(context: ExtensionContext) {
         languages.registerHoverProvider({ scheme: 'file', language: 'stride' }, hoverProvider),
         languages.registerDefinitionProvider({ scheme: 'file', language: 'stride' }, definitionProvider),
         languages.registerDocumentLinkProvider({ scheme: 'file', language: 'stride' }, documentLinkProvider),
+        languages.registerDocumentSemanticTokensProvider(
+            { scheme: 'file', language: 'stride' },
+            semanticTokensProvider,
+            semanticTokensLegend
+        ),
         languages.registerCompletionItemProvider({ scheme: 'file', language: 'stride' }, completionProvider, '.', ':', '>')
     );
 }
