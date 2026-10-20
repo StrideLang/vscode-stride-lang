@@ -106,7 +106,30 @@ To prevent UI stutter during typing:
 
 ---
 
-## 7. Build, Test, and Packaging Instructions
+## 7. Compilation, Testing & Launch (F5) Architecture
+
+### F5 DebugConfigurationProvider Contract
+- In [`src/extension.ts`](file:///c:/Users/Andres/source/repos/vscode-stride-lang/src/extension.ts), `StrideDebugConfigurationProvider` registers as a VS Code debugger provider for `type: "stride"`.
+- It implements `provideDebugConfigurations` (providing default templates for `test`, `compile`, and `flash`) and `resolveDebugConfiguration`.
+- If triggered on a `.stride` file without a pre-existing `launch.json`, it prompts the user with an interactive `QuickPick` containing the 3 configurations.
+- `resolveDebugConfiguration` triggers `executeStrideLaunchConfig(config)` and returns `undefined` to cleanly terminate the VS Code debug session lifecycle without launching a debug adapter process.
+- All dirty documents are automatically saved via `doc.save()` before execution.
+
+### Toolchain Resolution Priority
+When finding executables (`stridec.exe`, `stridetest.exe`):
+1. VS Code settings: `stride.stridecPath` or `stride.stridetestPath`.
+2. Environment variables: `STRIDEC_PATH` or `STRIDETEST_PATH`.
+3. Sibling repository build directories (`build-Stride-*`, `boardgame/build/*`, `build/`).
+4. Fallback to binary name on system `PATH`.
+
+### Terminal Execution & Variable Expansion
+- Dedicated persistent terminals are used for each mode: `Stride: Test`, `Stride: Compile`, `Stride: Flash`.
+- Variable substitutions (`${file}`, `${fileDirname}`, `${fileBasename}`, `${fileBasenameNoExtension}`, `${fileExtname}`, `${workspaceFolder}`) are evaluated before constructing the command string.
+- Command lines are escaped with `quoteArg` and prefixed with `&` on Windows PowerShell to ensure robust handling of paths containing whitespace.
+
+---
+
+## 8. Build, Test, and Packaging Instructions
 
 ### TypeScript Extension Build
 ```powershell

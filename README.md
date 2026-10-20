@@ -33,6 +33,74 @@ Comprehensive language support and Language Server for **[Stride](https://github
 
 ---
 
+## Compiling, Testing & Launching (F5)
+
+`vscode-stride-lang` provides complete integration with the Stride toolchain (`stridec` compiler and `stridetest` test runner).
+
+### 1. F5 Execution & Interactive Quick-Pick
+Press **`F5`** while viewing any `.stride` file to run or compile. If no `.vscode/launch.json` file is present in your workspace, an interactive Quick-Pick menu will prompt you to select from three execution modes:
+
+- **Run Unit Tests in File (`mode: "test"`)**:
+  - Invokes `stridetest <file> --root <strideroot>`.
+  - Runs inside the dedicated `Stride: Test` integrated terminal.
+- **Compile File to Disk (`mode: "compile"`)**:
+  - Compiles the active `.stride` file to an object file (`.o`) and C/C++ header (`.h`):
+    `stridec -c <file> -o <output.o> --emit-header=<header.h> --strideroot=<strideroot>`
+  - Runs inside the dedicated `Stride: Compile` integrated terminal.
+- **Build and Flash / Run (Future) (`mode: "flash"`)**:
+  - Compiles the target binary and verifies build artifacts, designated for target device upload in an upcoming release.
+  - Runs inside the dedicated `Stride: Flash` integrated terminal.
+
+> [!TIP]
+> Any unsaved modifications in the active editor are automatically saved before compilation or test execution begins.
+
+### 2. Editor Title & Context Menus
+You can also trigger these actions directly without keyboard shortcuts:
+- The **Run button** in the top-right editor title bar.
+- The **Right-click context menu** inside any `.stride` file.
+- The **Command Palette** (`Ctrl+Shift+P`):
+  - `Stride: Run Unit Tests in File`
+  - `Stride: Compile File to Disk`
+  - `Stride: Build and Flash / Run (Future)`
+
+### 3. Launch Configurations (`launch.json`)
+You can define custom configurations in `.vscode/launch.json`:
+
+```json
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "stride",
+            "request": "launch",
+            "name": "Stride: Run Tests",
+            "mode": "test",
+            "file": "${file}"
+        },
+        {
+            "type": "stride",
+            "request": "launch",
+            "name": "Stride: Compile to Disk",
+            "mode": "compile",
+            "file": "${file}",
+            "output": "${fileDirname}/${fileBasenameNoExtension}.o",
+            "header": "${fileDirname}/${fileBasenameNoExtension}.h"
+        },
+        {
+            "type": "stride",
+            "request": "launch",
+            "name": "Stride: Build & Flash",
+            "mode": "flash",
+            "file": "${file}"
+        }
+    ]
+}
+```
+
+Supported variable expansions in paths: `${file}`, `${fileDirname}`, `${fileBasename}`, `${fileBasenameNoExtension}`, `${fileExtname}`, and `${workspaceFolder}`.
+
+---
+
 ## Building the Language Server (`server/`)
 
 The C++ Language Server lives under [`server/`](file:///C:/Users/Andres/source/repos/vscode-stride-lang/server).
@@ -103,9 +171,18 @@ This generates `stride-language-0.1.0.vsix` in the project root.
 ## Extension Settings
 
 - `stride.server.path`: Optional override for the path to the `stride-lsp.exe` binary.
+- `stride.stridecPath`: Path to the Stride Compiler binary (`stridec.exe`). If empty, auto-discovery is used.
+- `stride.stridetestPath`: Path to the Stride Unit Test Runner binary (`stridetest.exe`). If empty, auto-discovery is used.
 - `stride.strideroot`: Path to the Stride root directory containing standard library definitions (overrides environment variable and bundled fallback library).
 - `stride.includePaths`: Additional search paths for Stride system and domain definitions.
 - `stride.trace.server`: Tracing level for LSP communications (`off`, `messages`, `verbose`).
+
+### Toolchain Discovery Order
+When `stride.stridecPath` or `stride.stridetestPath` is not explicitly set, the extension automatically discovers executables in the following order:
+1. User settings in VS Code (`stride.stridecPath`, `stride.stridetestPath`).
+2. Environment variables (`STRIDEC_PATH`, `STRIDETEST_PATH`).
+3. Local workspace and sibling build directories (e.g. `build-Stride-*`, `boardgame/build/*`).
+4. System `PATH`.
 
 ## License
 
