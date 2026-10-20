@@ -83,6 +83,100 @@
                 "path": "./snippets/stride.json"
             }
         ],
+        "commands": [
+            {
+                "command": "stride.runTest",
+                "title": "Stride: Run Unit Tests in File",
+                "category": "Stride"
+            },
+            {
+                "command": "stride.compileFile",
+                "title": "Stride: Compile File to Disk",
+                "category": "Stride"
+            },
+            {
+                "command": "stride.buildAndFlash",
+                "title": "Stride: Build and Flash / Run (Future)",
+                "category": "Stride"
+            }
+        ],
+        "menus": {
+            "editor/title/run": [
+                {
+                    "command": "stride.compileFile",
+                    "when": "resourceLangId == stride",
+                    "group": "navigation@1"
+                },
+                {
+                    "command": "stride.runTest",
+                    "when": "resourceLangId == stride",
+                    "group": "navigation@2"
+                }
+            ],
+            "editor/context": [
+                {
+                    "command": "stride.compileFile",
+                    "when": "resourceLangId == stride",
+                    "group": "stride@1"
+                },
+                {
+                    "command": "stride.runTest",
+                    "when": "resourceLangId == stride",
+                    "group": "stride@2"
+                },
+                {
+                    "command": "stride.buildAndFlash",
+                    "when": "resourceLangId == stride",
+                    "group": "stride@3"
+                }
+            ]
+        },
+        "debuggers": [
+            {
+                "type": "stride",
+                "label": "Stride",
+                "languages": [
+                    "stride"
+                ],
+                "configurationSnippets": [
+                    {
+                        "label": "Stride: Run Unit Tests in File",
+                        "description": "Run unit tests in the active Stride file",
+                        "body": {
+                            "type": "stride",
+                            "request": "launch",
+                            "name": "Stride: Run Unit Tests in File",
+                            "mode": "test",
+                            "file": "${file}"
+                        }
+                    },
+                    {
+                        "label": "Stride: Compile File to Disk",
+                        "description": "Compile the active Stride file to an object file (.o) and C header (.h)",
+                        "body": {
+                            "type": "stride",
+                            "request": "launch",
+                            "name": "Stride: Compile File to Disk",
+                            "mode": "compile",
+                            "file": "${file}",
+                            "output": "${fileDirname}/${fileBasenameNoExtension}.o",
+                            "header": "${fileDirname}/${fileBasenameNoExtension}.h"
+                        }
+                    },
+                    {
+                        "label": "Stride: Build and Flash / Run (Future)",
+                        "description": "Build and flash/run Stride program on target hardware (Future feature)",
+                        "body": {
+                            "type": "stride",
+                            "request": "launch",
+                            "name": "Stride: Build and Flash / Run (Future)",
+                            "mode": "flash",
+                            "file": "${file}"
+                        }
+                    }
+                ]
+            }
+        ],
         "configuration": {
             "title": "Stride",
             "properties": {
@@ -90,6 +184,16 @@
                     "type": "string",
                     "default": "",
                     "description": "Path to the Stride Language Server binary (stride-lsp.exe)."
+                },
+                "stride.stridecPath": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Path to the Stride Compiler binary (stridec.exe). If empty, auto-discovery is used."
+                },
+                "stride.stridetestPath": {
+                    "type": "string",
+                    "default": "",
+                    "description": "Path to the Stride Unit Test Runner binary (stridetest.exe). If empty, auto-discovery is used."
                 },
                 "stride.strideroot": {
                     "type": "string",

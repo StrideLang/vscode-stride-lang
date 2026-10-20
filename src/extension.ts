@@ -28,7 +28,16 @@ import {
     DocumentSemanticTokensProvider,
     SemanticTokens,
     SemanticTokensLegend,
-    SemanticTokensBuilder
+    SemanticTokensBuilder,
+    debug,
+    DebugConfiguration,
+    DebugConfigurationProvider,
+    WorkspaceFolder,
+    CancellationToken,
+    ProviderResult,
+    Terminal,
+    commands,
+    QuickPickItem
 } from 'vscode';
 import {
     LanguageClient,
@@ -805,32 +814,37 @@ function getLibraryFiles(): string[] {
     return cachedLibraryFiles;
 }
 
-function getStrideRootDirs(): string[] {
-    const rootDirs: string[] = [];
+function getEffectiveStrideRoot(): string | undefined {
     const config = workspace.getConfiguration('stride');
     const configuredStrideroot = config.get<string>('strideroot');
     if (configuredStrideroot && fs.existsSync(configuredStrideroot)) {
-        rootDirs.push(path.join(configuredStrideroot, 'library'));
-        rootDirs.push(configuredStrideroot);
-        return rootDirs;
+        return configuredStrideroot;
     }
 
     if (process.env.STRIDEROOT && fs.existsSync(process.env.STRIDEROOT)) {
-        rootDirs.push(path.join(process.env.STRIDEROOT, 'library'));
-        rootDirs.push(process.env.STRIDEROOT);
-        return rootDirs;
+        return process.env.STRIDEROOT;
     }
 
-    // Bundled strideroot is strictly the final fallback
     if (extensionContext) {
         const bundledRoot = extensionContext.asAbsolutePath('strideroot');
         if (fs.existsSync(bundledRoot)) {
-            const bundledLib = path.join(bundledRoot, 'library');
-            if (fs.existsSync(bundledLib)) rootDirs.push(bundledLib);
-            rootDirs.push(bundledRoot);
+            return bundledRoot;
         }
     }
 
+    return undefined;
+}
+
+function getStrideRootDirs(): string[] {
+    const rootDirs: string[] = [];
+    const eff = getEffectiveStrideRoot();
+    if (eff) {
+        const lib = path.join(eff, 'library');
+        if (fs.existsSync(lib)) {
+            rootDirs.push(lib);
+        }
+        rootDirs.push(eff);
+    }
     return rootDirs;
 }
 
@@ -2856,8 +2870,336 @@ function registerFallbackProviders(context: ExtensionContext) {
     );
 }
 
+// ============================================================================
+// Stride Compilation, Unit Testing & Debug/F5 Launch Support
+// ============================================================================
+
+let strideTerminal: Terminal | undefined;
+
+function getOrCreateTerminal(name: string): Terminal {
+    if (strideTerminal && !strideTerminal.exitStatus) {
+        return strideTerminal;
+    }
+    const existing = window.terminals.find(t => t.name === name);
+    if (existing && !existing.exitStatus) {
+        strideTerminal = existing;
+        return existing;
+    }
+    strideTerminal = window.createTerminal({ name });
+    return strideTerminal;
+}
+
+function expandVariables(str: string, filePath: string, workspaceFolder?: WorkspaceFolder): string {
+    const parsed = path.parse(filePath);
+    const wsFolder = workspaceFolder ? workspaceFolder.uri.fsPath : (workspace.workspaceFolders?.[0]?.uri.fsPath || parsed.dir);
+    return str
+        .replace(/\${file}/g, filePath)
+        .replace(/\${fileDirname}/g, parsed.dir)
+        .replace(/\${fileBasename}/g, parsed.base)
+        .replace(/\${fileBasenameNoExtension}/g, parsed.name)
+        .replace(/\${fileExtname}/g, parsed.ext)
+        .replace(/\${workspaceFolder}/g, wsFolder);
+}
+
+function findExecutable(toolName: string, configSetting: string, envVar: string, searchSubpaths: string[]): string {
+    const config = workspace.getConfiguration('stride');
+    const configured = config.get<string>(configSetting);
+    if (configured && fs.existsSync(configured)) {
+        return configured;
+    }
+
+    const envPath = process.env[envVar];
+    if (envPath && fs.existsSync(envPath)) {
+        return envPath;
+    }
+
+    const roots: string[] = [];
+    if (workspace.workspaceFolders) {
+        for (const wf of workspace.workspaceFolders) {
+            roots.push(wf.uri.fsPath);
+            roots.push(path.dirname(wf.uri.fsPath));
+        }
+    }
+    if (extensionContext) {
+        roots.push(extensionContext.extensionPath);
+        roots.push(path.dirname(extensionContext.extensionPath));
+    }
+
+    for (const r of roots) {
+        for (const sp of searchSubpaths) {
+            const candidate = path.isAbsolute(sp) ? sp : path.join(r, sp);
+            if (fs.existsSync(candidate)) {
+                return candidate;
+            }
+        }
+    }
+
+    return toolName;
+}
+
+function quoteArg(arg: string): string {
+    if ((arg.includes(' ') || arg.includes('\t')) && !arg.startsWith('"')) {
+        return `"${arg}"`;
+    }
+    return arg;
+}
+
+function buildCommandLine(executable: string, args: (string | undefined)[]): string {
+    const validArgs = args.filter((a): a is string => Boolean(a && a.trim().length > 0));
+    const quotedExe = quoteArg(executable);
+    const formattedArgs = validArgs.map(quoteArg).join(' ');
+
+    if (process.platform === 'win32') {
+        if (quotedExe.startsWith('"')) {
+            return `& ${quotedExe} ${formattedArgs}`;
+        }
+    }
+    return `${quotedExe} ${formattedArgs}`;
+}
+
+async function executeStrideLaunchConfig(config: DebugConfiguration, targetUri?: Uri): Promise<void> {
+    let activeDoc = window.activeTextEditor?.document;
+    if (targetUri) {
+        const found = workspace.textDocuments.find(d => d.uri.toString() === targetUri.toString());
+        if (found) {
+            activeDoc = found;
+        }
+    }
+
+    if (activeDoc && activeDoc.isDirty) {
+        await activeDoc.save();
+    }
+
+    const currentFile = targetUri ? targetUri.fsPath : (activeDoc ? activeDoc.fileName : undefined);
+    if (!currentFile && !config.file) {
+        window.showErrorMessage('No active Stride file to run or compile.');
+        return;
+    }
+
+    const wsFolder = currentFile ? workspace.getWorkspaceFolder(Uri.file(currentFile)) : workspace.workspaceFolders?.[0];
+    const rawFile = config.file || '${file}';
+    const filePath = expandVariables(rawFile, currentFile || '', wsFolder);
+
+    if (!fs.existsSync(filePath)) {
+        window.showErrorMessage(`Stride file not found: ${filePath}`);
+        return;
+    }
+
+    const effectiveStrideroot = getEffectiveStrideRoot();
+    const mode = (config.mode || 'compile').toLowerCase();
+
+    if (mode === 'test') {
+        const testRunner = findExecutable('stridetest', 'stridetestPath', 'STRIDETEST_PATH', [
+            'boardgame/build/Desktop_Qt_6_7_3_MSVC2022_64bit-Debug/libgame/external/stridejit/stridetest.exe',
+            'boardgame/build/Desktop_Qt_6_7_3_MSVC2022_64bit-Release/libgame/external/stridejit/stridetest.exe',
+            'Stride/build/stridejit/stridetest.exe',
+            'build/external/stridejit/stridetest.exe',
+            'build/stridetest.exe',
+            'bin/stridetest.exe'
+        ]);
+        const terminal = getOrCreateTerminal('Stride: Test');
+        terminal.show();
+
+        const extraArgs: string[] = [];
+        if (effectiveStrideroot) {
+            extraArgs.push('--root', effectiveStrideroot);
+        }
+        if (config.args && Array.isArray(config.args)) {
+            extraArgs.push(...config.args);
+        }
+
+        const cmd = buildCommandLine(testRunner, [filePath, ...extraArgs]);
+        terminal.sendText(cmd);
+    } else if (mode === 'compile') {
+        const compiler = findExecutable('stridec', 'stridecPath', 'STRIDEC_PATH', [
+            'build-Stride-Desktop_Qt_6_5_1_MSVC2019_64bit-Release/compiler/stridec.exe',
+            'build-Stride-Desktop_Qt_6_5_1_MSVC2019_64bit-Debug/compiler/stridec.exe',
+            'Stride/build/compiler/stridec.exe',
+            'build/compiler/stridec.exe',
+            'compiler/stridec.exe',
+            'bin/stridec.exe'
+        ]);
+        const terminal = getOrCreateTerminal('Stride: Compile');
+        terminal.show();
+
+        const defaultOut = `${path.join(path.dirname(filePath), path.parse(filePath).name)}.o`;
+        const defaultHdr = `${path.join(path.dirname(filePath), path.parse(filePath).name)}.h`;
+        const outFile = config.output ? expandVariables(config.output, filePath, wsFolder) : defaultOut;
+        const hdrFile = config.header ? expandVariables(config.header, filePath, wsFolder) : defaultHdr;
+
+        const extraArgs: string[] = ['-c', filePath, '-o', outFile, `--emit-header=${hdrFile}`];
+        if (effectiveStrideroot) {
+            extraArgs.push(`--strideroot=${effectiveStrideroot}`);
+        }
+        if (config.args && Array.isArray(config.args)) {
+            extraArgs.push(...config.args);
+        }
+
+        const cmd = buildCommandLine(compiler, extraArgs);
+        terminal.sendText(cmd);
+    } else if (mode === 'flash') {
+        const compiler = findExecutable('stridec', 'stridecPath', 'STRIDEC_PATH', [
+            'build-Stride-Desktop_Qt_6_5_1_MSVC2019_64bit-Release/compiler/stridec.exe',
+            'build-Stride-Desktop_Qt_6_5_1_MSVC2019_64bit-Debug/compiler/stridec.exe',
+            'Stride/build/compiler/stridec.exe',
+            'build/compiler/stridec.exe',
+            'compiler/stridec.exe',
+            'bin/stridec.exe'
+        ]);
+        const terminal = getOrCreateTerminal('Stride: Flash');
+        terminal.show();
+
+        const defaultOut = `${path.join(path.dirname(filePath), path.parse(filePath).name)}.o`;
+        const defaultHdr = `${path.join(path.dirname(filePath), path.parse(filePath).name)}.h`;
+        const outFile = config.output ? expandVariables(config.output, filePath, wsFolder) : defaultOut;
+        const hdrFile = config.header ? expandVariables(config.header, filePath, wsFolder) : defaultHdr;
+
+        const extraArgs: string[] = ['-c', filePath, '-o', outFile, `--emit-header=${hdrFile}`];
+        if (effectiveStrideroot) {
+            extraArgs.push(`--strideroot=${effectiveStrideroot}`);
+        }
+        const cmd = buildCommandLine(compiler, extraArgs);
+        terminal.sendText(cmd);
+
+        const flashNotice = 'Target binary compiled. Hardware flash / run is designated as a future capability and will be supported in an upcoming release.';
+        terminal.sendText(process.platform === 'win32'
+            ? `Write-Host "${flashNotice}" -ForegroundColor Cyan`
+            : `echo "${flashNotice}"`
+        );
+        window.showInformationMessage(`Target build generated for ${path.basename(filePath)}. Device flash/run is designated as a future feature.`);
+    } else {
+        window.showErrorMessage(`Unknown Stride execution mode: ${mode}`);
+    }
+}
+
+interface StrideQuickPickItem extends QuickPickItem {
+    mode: 'test' | 'compile' | 'flash';
+}
+
+class StrideDebugConfigurationProvider implements DebugConfigurationProvider {
+    provideDebugConfigurations(folder?: WorkspaceFolder, token?: CancellationToken): ProviderResult<DebugConfiguration[]> {
+        return [
+            {
+                type: 'stride',
+                request: 'launch',
+                name: 'Stride: Run Unit Tests in File',
+                mode: 'test',
+                file: '${file}'
+            },
+            {
+                type: 'stride',
+                request: 'launch',
+                name: 'Stride: Compile File to Disk',
+                mode: 'compile',
+                file: '${file}',
+                output: '${fileDirname}/${fileBasenameNoExtension}.o',
+                header: '${fileDirname}/${fileBasenameNoExtension}.h'
+            },
+            {
+                type: 'stride',
+                request: 'launch',
+                name: 'Stride: Build and Flash / Run (Future)',
+                mode: 'flash',
+                file: '${file}'
+            }
+        ];
+    }
+
+    async resolveDebugConfiguration(folder: WorkspaceFolder | undefined, config: DebugConfiguration, token?: CancellationToken): Promise<DebugConfiguration | undefined> {
+        if (!config.type && !config.request && !config.name) {
+            const editor = window.activeTextEditor;
+            if (editor && editor.document.languageId === 'stride') {
+                const items: StrideQuickPickItem[] = [
+                    {
+                        label: '$(beaker) Stride: Run Unit Tests in File',
+                        description: 'Execute unit tests via stridetest',
+                        mode: 'test'
+                    },
+                    {
+                        label: '$(file-binary) Stride: Compile File to Disk',
+                        description: 'Compile file to .o object and .h header via stridec',
+                        mode: 'compile'
+                    },
+                    {
+                        label: '$(zap) Stride: Build and Flash / Run (Future)',
+                        description: 'Compile and prepare hardware upload',
+                        mode: 'flash'
+                    }
+                ];
+
+                const selected = await window.showQuickPick(items, {
+                    placeHolder: 'Select Stride launch configuration'
+                });
+
+                if (!selected) {
+                    return undefined;
+                }
+
+                config.type = 'stride';
+                config.request = 'launch';
+                config.name = selected.label;
+                config.mode = selected.mode;
+                config.file = '${file}';
+                if (selected.mode === 'compile' || selected.mode === 'flash') {
+                    config.output = '${fileDirname}/${fileBasenameNoExtension}.o';
+                    config.header = '${fileDirname}/${fileBasenameNoExtension}.h';
+                }
+            } else {
+                window.showInformationMessage('Open a Stride (.stride) file to run or compile.');
+                return undefined;
+            }
+        }
+
+        await executeStrideLaunchConfig(config);
+        return undefined;
+    }
+}
+
+function registerDebugAndExecutionCommands(context: ExtensionContext): void {
+    const provider = new StrideDebugConfigurationProvider();
+    context.subscriptions.push(
+        debug.registerDebugConfigurationProvider('stride', provider)
+    );
+
+    context.subscriptions.push(
+        commands.registerCommand('stride.runTest', async (uri?: Uri) => {
+            await executeStrideLaunchConfig({
+                type: 'stride',
+                request: 'launch',
+                name: 'Stride: Run Unit Tests in File',
+                mode: 'test',
+                file: '${file}'
+            }, uri);
+        }),
+        commands.registerCommand('stride.compileFile', async (uri?: Uri) => {
+            await executeStrideLaunchConfig({
+                type: 'stride',
+                request: 'launch',
+                name: 'Stride: Compile File to Disk',
+                mode: 'compile',
+                file: '${file}',
+                output: '${fileDirname}/${fileBasenameNoExtension}.o',
+                header: '${fileDirname}/${fileBasenameNoExtension}.h'
+            }, uri);
+        }),
+        commands.registerCommand('stride.buildAndFlash', async (uri?: Uri) => {
+            await executeStrideLaunchConfig({
+                type: 'stride',
+                request: 'launch',
+                name: 'Stride: Build and Flash / Run (Future)',
+                mode: 'flash',
+                file: '${file}'
+            }, uri);
+        })
+    );
+}
+
 export function activate(context: ExtensionContext) {
     extensionContext = context;
+
+    // Register F5 debugging and compilation commands
+    registerDebugAndExecutionCommands(context);
+
     const serverExecutable = findServerBinary(context);
 
     if (!serverExecutable) {
@@ -2866,18 +3208,7 @@ export function activate(context: ExtensionContext) {
         return;
     }
 
-    const config = workspace.getConfiguration('stride');
-    const configuredStrideroot = config.get<string>('strideroot');
-    const bundledStrideroot = context.asAbsolutePath('strideroot');
-    let effectiveStrideroot: string | undefined = undefined;
-
-    if (configuredStrideroot && fs.existsSync(configuredStrideroot)) {
-        effectiveStrideroot = configuredStrideroot;
-    } else if (process.env.STRIDEROOT && fs.existsSync(process.env.STRIDEROOT)) {
-        effectiveStrideroot = process.env.STRIDEROOT;
-    } else if (fs.existsSync(bundledStrideroot)) {
-        effectiveStrideroot = bundledStrideroot;
-    }
+    const effectiveStrideroot = getEffectiveStrideRoot();
 
     console.log(`Starting Stride Language Server: ${serverExecutable}`);
     if (effectiveStrideroot) {
