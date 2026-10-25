@@ -16,20 +16,20 @@ if(NOT TARGET StrideUtils)
     add_subdirectory("${STRIDE_ROOT}/strideutils" strideutils_build)
 endif()
 
-if(NOT TARGET StrideCodegen)
-    add_subdirectory("${STRIDE_ROOT}/codegen" stridecodegen_build)
+if(NOT TARGET StrideGen)
+    add_subdirectory("${STRIDE_ROOT}/stridegen" stridegen_build)
 endif()
 
 add_executable(stride-lsp src/main.cpp)
 
 target_include_directories(stride-lsp PRIVATE
-    "${STRIDE_ROOT}/codegen/include"
+    "${STRIDE_ROOT}/stridegen/include"
     "${STRIDE_ROOT}/strideparser/include"
     "${STRIDE_ROOT}/strideutils/include"
 )
 
 target_link_libraries(stride-lsp PRIVATE
-    StrideCodegen
+    StrideGen
     StrideParser
     StrideUtils
 )

@@ -527,7 +527,7 @@ function parseDeclarationsFromBlock(blockBody: string, baseLine: number, filePat
 
         const nameVal = extractTopLevelField(pBody, block.maskedBody, 'name');
         const typeNameVal = extractTopLevelField(pBody, block.maskedBody, 'typeName');
-        const blockVal = (kind === 'alias') ? extractTopLevelField(pBody, block.maskedBody, 'block') : undefined;
+        const blockVal = (kind === 'alias') ? extractTopLevelField(pBody, block.maskedBody, 'entity') : undefined;
 
         if (!name) {
             name = nameVal ||
@@ -541,7 +541,7 @@ function parseDeclarationsFromBlock(blockBody: string, baseLine: number, filePat
         const declType = extractTopLevelField(pBody, block.maskedBody, 'type');
         const declDomain = extractTopLevelField(pBody, block.maskedBody, 'domain');
         const declDefaultVal = extractTopLevelField(pBody, block.maskedBody, 'default');
-        const declBoundBlock = (kind === 'alias') ? extractTopLevelField(pBody, block.maskedBody, 'block') : undefined;
+        const declBoundBlock = (kind === 'alias') ? extractTopLevelField(pBody, block.maskedBody, 'entity') : undefined;
 
         let sig = `${kind} ${name}`;
         if (bracketContent !== undefined) {
@@ -624,7 +624,7 @@ function parseScopeTree(text: string, filePath: string, preMaskedText?: string):
 
         const nameVal = extractTopLevelField(block.body, block.maskedBody, 'name');
         const typeNameVal = extractTopLevelField(block.body, block.maskedBody, 'typeName');
-        const blockVal = (kind === 'alias') ? extractTopLevelField(block.body, block.maskedBody, 'block') : undefined;
+        const blockVal = (kind === 'alias') ? extractTopLevelField(block.body, block.maskedBody, 'entity') : undefined;
 
         if (!name) {
             name = nameVal ||
@@ -638,7 +638,7 @@ function parseScopeTree(text: string, filePath: string, preMaskedText?: string):
         const declType = extractTopLevelField(block.body, block.maskedBody, 'type');
         const declDomain = extractTopLevelField(block.body, block.maskedBody, 'domain');
         const declDefaultVal = extractTopLevelField(block.body, block.maskedBody, 'default');
-        const declBoundBlock = (kind === 'alias') ? extractTopLevelField(block.body, block.maskedBody, 'block') : undefined;
+        const declBoundBlock = (kind === 'alias') ? extractTopLevelField(block.body, block.maskedBody, 'entity') : undefined;
 
         const scope: ScopeContext = {
             name,
@@ -1009,7 +1009,7 @@ function parseLibrarySymbols(text: string, filePath: string, preMaskedText?: str
         const inputs = extractTopLevelList(body, block.maskedBody, 'inputs');
         const outputs = extractTopLevelList(body, block.maskedBody, 'outputs');
 
-        const targetBlock = (kind === 'alias') ? extractTopLevelField(body, block.maskedBody, 'block') : undefined;
+        const targetBlock = (kind === 'alias') ? extractTopLevelField(body, block.maskedBody, 'entity') : undefined;
 
         let sig = `${kind} ${name}`;
         if (bracketContent !== undefined) {

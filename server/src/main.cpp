@@ -26,9 +26,12 @@
 #endif
 
 #include "stride/parser/strideparser.h"
-#include "stride/codegen/codeanalysis.hpp"
-#include "stride/codegen/codevalidator.hpp"
-#include "stride/codegen/stridesystem.hpp"
+#include "stride/stridegen/codeanalysis.hpp"
+#include "stride/stridegen/coderesolver.hpp"
+#include "stride/stridegen/codevalidator.hpp"
+#include "stride/stridegen/stridesystem.hpp"
+#include "stride/parser/platformnode.h"
+#include "stride/utils/astfunctions.h"
 #include "stride/utils/astquery.h"
 #include "stride/utils/astvalidation.h"
 #include "stride/utils/stridelibrary.h"
@@ -245,6 +248,7 @@ std::shared_ptr<DeclarationNode> findPortForBlockInScopeStack(const ScopeStack &
 
 StrideLibrary g_library;
 ASTNode g_libraryRootTree = nullptr;
+std::string g_strideRoot;
 
 std::string findStrideRoot(const std::string &explicitRoot = "") {
     if (!explicitRoot.empty() && std::filesystem::exists(explicitRoot)) return explicitRoot;
@@ -264,6 +268,7 @@ std::string findStrideRoot(const std::string &explicitRoot = "") {
 
 void initLibrary(const std::string &explicitRoot = "") {
     std::string sRoot = findStrideRoot(explicitRoot);
+    g_strideRoot = sRoot;
     if (!sRoot.empty()) {
         try {
             g_library.initializeLibrary(sRoot);
@@ -317,6 +322,8 @@ void publishDiagnostics(const std::string &uri, const std::vector<LangError> &er
         } else if (err.type == LangError::ConstraintFail) {
             if (err.errorTokens.size() > 3) searchTokens.push_back(err.errorTokens[3]);
             if (err.errorTokens.size() > 1) searchTokens.push_back(err.errorTokens[1]);
+        } else if (err.type == LangError::LossyConversion) {
+            // Tokens are type names and a reason. Mark the whole stream line.
         } else {
             searchTokens = err.errorTokens;
         }
@@ -388,7 +395,8 @@ void publishDiagnostics(const std::string &uri, const std::vector<LangError> &er
         if (i > 0) json << ",";
         json << "{";
         json << "\"range\":{\"start\":{\"line\":" << line << ",\"character\":" << startChar << "},\"end\":{\"line\":" << line << ",\"character\":" << endChar << "}},";
-        json << "\"severity\":1,"; // 1 = Error
+        // 1 = Error, 2 = Warning
+        json << "\"severity\":" << (err.severity == LangError::Warning ? 2 : 1) << ",";
         json << "\"source\":\"stride\",";
         std::string msg = err.getErrorText();
         // Clean up leading "In file ...:\n    Line X : " prefix if present for cleaner IDE presentation
@@ -470,6 +478,32 @@ void analyzeDocument(DocumentState &doc) {
             }
         } catch (...) {
             // Validator safety catch
+        }
+
+        // 3. Warn about conversions that can lose data. They are only known
+        // after resolving data types, which changes the tree, so a copy is
+        // resolved.
+        if (!g_strideRoot.empty()) {
+            try {
+                ASTNode resolved = doc.tree->deepCopy();
+                if (ASTQuery::getSystemNodes(resolved).empty()) {
+                    resolved->addChild(std::make_shared<SystemNode>(
+                        "JIT", 1, 0, __FILE__, __LINE__));
+                }
+                ASTFunctions::preprocess(resolved);
+                CodeResolver resolver(resolved, g_strideRoot);
+                resolver.process();
+                for (const auto &warning :
+                     CodeValidator::findLossyConversions(resolved)) {
+                    if (warning.filename == tempFile ||
+                        warning.filename == doc.uri ||
+                        warning.filename == uriToPath(doc.uri)) {
+                        doc.errors.push_back(warning);
+                    }
+                }
+            } catch (...) {
+                // Resolver safety catch
+            }
         }
     } else {
         auto parseErrors = getErrors();
