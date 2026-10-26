@@ -43,11 +43,14 @@ import {
     LanguageClient,
     LanguageClientOptions,
     ServerOptions,
-    TransportKind
+    TransportKind,
+    CloseAction,
+    ErrorAction
 } from 'vscode-languageclient/node';
 
 let client: LanguageClient | undefined;
 let extensionContext: ExtensionContext | undefined;
+let fallbackProvidersRegistered = false;
 
 function findServerBinary(context: ExtensionContext): string | undefined {
     const config = workspace.getConfiguration('stride');
@@ -182,16 +185,157 @@ const TYPE_ALIASES: Record<string, string> = {
     'gameDefinition': '_GameDefinitionType',
     '_GameDefinitionType': '_GameDefinitionType',
     'action': '_ActionType',
-    '_ActionType': '_ActionType'
+    '_ActionType': '_ActionType',
+    'frameworkDataType': '_FrameworkDataType',
+    '_frameworkDataType': '_FrameworkDataType',
+    'typeClass': '_TypeClass',
+    '_typeClass': '_TypeClass',
+    'frameworkTypeClass': '_FrameworkTypeClass',
+    '_frameworkTypeClass': '_FrameworkTypeClass'
 };
 
 const BUILTIN_SCALARS: Record<string, string> = {
-    '_IntType': '**Built-in Type**: `_IntType` — *Standard 32-bit signed integer data type.*',
-    '_RealType': '**Built-in Type**: `_RealType` — *64-bit IEEE 754 double precision floating point data type.*',
-    '_SwitchType': '**Built-in Type**: `_SwitchType` — *Boolean switch / conditional control signal (`on` / `off`).*',
+    // Framework-sized data types and aliases
+    'Int': '**Data Type Alias**: `Int` — *Signed integer of the size preferred by the framework (default `Int32`).*',
+    'UInt': '**Data Type Alias**: `UInt` — *Unsigned integer of the size preferred by the framework (default `UInt32`).*',
+    'Real': '**Data Type Alias**: `Real` — *Floating point number of the size preferred by the framework (default `Float64`).*',
+    'Size': '**Data Type Alias**: `Size` — *Unsigned integer for sizes and counts (default `UInt64`).*',
+    'Int8': '**Fixed-Size Data Type**: `Int8` — *8-bit signed integer (-128 to 127).*',
+    'Int16': '**Fixed-Size Data Type**: `Int16` — *16-bit signed integer (-32,768 to 32,767).*',
+    'Int32': '**Fixed-Size Data Type**: `Int32` — *32-bit signed integer.*',
+    'Int64': '**Fixed-Size Data Type**: `Int64` — *64-bit signed integer.*',
+    'UInt8': '**Fixed-Size Data Type**: `UInt8` — *8-bit unsigned integer (0 to 255).*',
+    'UInt16': '**Fixed-Size Data Type**: `UInt16` — *16-bit unsigned integer (0 to 65,535).*',
+    'UInt32': '**Fixed-Size Data Type**: `UInt32` — *32-bit unsigned integer.*',
+    'UInt64': '**Fixed-Size Data Type**: `UInt64` — *64-bit unsigned integer.*',
+    'Float32': '**Fixed-Size Data Type**: `Float32` — *32-bit single precision IEEE 754 floating point number.*',
+    'Float64': '**Fixed-Size Data Type**: `Float64` — *64-bit double precision IEEE 754 floating point number.*',
+    'Switch': '**Data Type**: `Switch` — *Boolean switch / conditional control signal (`on` / `off`).*',
+    'String': '**Data Type**: `String` — *Text string.*',
+    '_NumericTypes': '**Type Class**: `_NumericTypes` — *Accepts any integer or float data type.*',
+    '_IntegerTypes': '**Type Class**: `_IntegerTypes` — *Accepts any signed or unsigned integer data type.*',
+    '_FloatTypes': '**Type Class**: `_FloatTypes` — *Accepts any floating point data type (`Real`, `Float32`, `Float64`).*',
+    '_DataTypes': '**Type Class**: `_DataTypes` — *Accepts all data types including `Switch` and `String`.*',
+    // Legacy schema / scalar names preserved for backwards compatibility
+    '_IntType': '**Built-in Type**: `_IntType` — *Standard 32-bit signed integer data type (legacy alias for `Int`).*',
+    '_RealType': '**Built-in Type**: `_RealType` — *64-bit IEEE 754 double precision floating point data type (legacy alias for `Real`).*',
+    '_SwitchType': '**Built-in Type**: `_SwitchType` — *Boolean switch / conditional control signal (`on` / `off`) (legacy alias for `Switch`).*',
+    '_StringType': '**Built-in Type**: `_StringType` — *Text string data type (legacy alias for `String`).*',
     '_StateType': '**Built-in Type**: `_StateType` — *State machine state representation.*',
     '_Signal': '**Built-in Type**: `_Signal` — *Base abstract signal representation in Stride.*'
 };
+
+interface DataTypeInfo {
+    kind: 'integer' | 'float' | 'switch' | 'string';
+    bits?: number;
+    signed?: boolean;
+}
+
+const DATA_TYPE_MAP: Record<string, DataTypeInfo> = {
+    'Int8': { kind: 'integer', bits: 8, signed: true },
+    'Int16': { kind: 'integer', bits: 16, signed: true },
+    'Int32': { kind: 'integer', bits: 32, signed: true },
+    'Int64': { kind: 'integer', bits: 64, signed: true },
+    'UInt8': { kind: 'integer', bits: 8, signed: false },
+    'UInt16': { kind: 'integer', bits: 16, signed: false },
+    'UInt32': { kind: 'integer', bits: 32, signed: false },
+    'UInt64': { kind: 'integer', bits: 64, signed: false },
+    'Float32': { kind: 'float', bits: 32 },
+    'Float64': { kind: 'float', bits: 64 },
+    'Int': { kind: 'integer', bits: 32, signed: true },
+    'UInt': { kind: 'integer', bits: 32, signed: false },
+    'Real': { kind: 'float', bits: 64 },
+    'Size': { kind: 'integer', bits: 64, signed: false },
+    'Switch': { kind: 'switch', bits: 1 },
+    'String': { kind: 'string' },
+    '_IntType': { kind: 'integer', bits: 32, signed: true },
+    '_RealType': { kind: 'float', bits: 64 },
+    '_SwitchType': { kind: 'switch', bits: 1 },
+    '_StringType': { kind: 'string' }
+};
+
+function getConversionRisk(fromType: string, toType: string): string | null {
+    if (fromType === toType) return null;
+    const from = DATA_TYPE_MAP[fromType];
+    const to = DATA_TYPE_MAP[toType];
+    if (!from || !to) return null;
+
+    if (from.kind === 'float' && to.kind === 'integer') {
+        return 'the fractional part is truncated, and large values overflow';
+    }
+    if (from.kind === 'float' && to.kind === 'float') {
+        if ((from.bits || 64) > (to.bits || 64)) {
+            return 'precision and range are lost';
+        }
+    }
+    if (from.kind === 'integer' && to.kind === 'float') {
+        const fromBits = from.bits || 32;
+        const toBits = to.bits || 64;
+        if (fromBits >= 32 && toBits === 32) {
+            return 'integers above 2^24 (Float32) are rounded';
+        }
+        if (fromBits === 64 && toBits === 64) {
+            return 'integers above 2^53 (Float64) are rounded';
+        }
+    }
+    if (from.kind === 'integer' && to.kind === 'integer') {
+        const fromBits = from.bits || 32;
+        const toBits = to.bits || 32;
+        const fromSigned = from.signed ?? true;
+        const toSigned = to.signed ?? true;
+
+        if (fromSigned && !toSigned) {
+            if (fromBits <= toBits) {
+                return 'negative values wrap';
+            } else {
+                return `wraps negative values and values above the maximum of ${toType}`;
+            }
+        }
+        if (!fromSigned && toSigned && fromBits >= toBits) {
+            return 'large values become negative';
+        }
+        if (fromBits > toBits) {
+            return `wraps values outside the range of ${toType}`;
+        }
+    }
+    return null;
+}
+
+function getLiteralConversionRisk(literalVal: string, toType: string): string | null {
+    const to = DATA_TYPE_MAP[toType];
+    if (!to) return null;
+
+    const num = Number(literalVal);
+    if (isNaN(num)) return null;
+
+    if (to.kind === 'integer') {
+        if (literalVal.includes('.')) {
+            return `fractional part is truncated for integer type '${toType}'`;
+        }
+        const bits = to.bits || 32;
+        const signed = to.signed ?? true;
+        if (signed) {
+            const min = -Math.pow(2, bits - 1);
+            const max = Math.pow(2, bits - 1) - 1;
+            if (num < min || num > max) {
+                return `wraps values outside the range of ${toType}`;
+            }
+        } else {
+            const max = Math.pow(2, bits) - 1;
+            if (num < 0) {
+                return 'wraps negative values';
+            }
+            if (num > max) {
+                return `wraps values above the maximum of ${toType}`;
+            }
+        }
+    } else if (to.kind === 'float') {
+        if (to.bits === 32 && Math.abs(num) > Math.pow(2, 24)) {
+            return 'integers above 2^24 (Float32) are rounded';
+        }
+    }
+    return null;
+}
 
 function maskCommentsAndStrings(text: string): string {
     const chars = text.split('');
@@ -1081,13 +1225,18 @@ function parseTypesFromText(text: string, filePath?: string, preMaskedText?: str
             const nameMatch = /name\s*:\s*(?:["']([^"']+)["']|([_a-zA-Z0-9]+))/.exec(pBody);
             const propName = (nameMatch ? (nameMatch[1] || nameMatch[2]) : undefined) || explicitName || 'property';
 
-            const typesMatch = /types\s*:\s*\[([^\]]*)\]/.exec(pBody);
+            const typesMatch = /(?:allowedTypes|types|type)\s*:\s*(?:constrained(?:List|Entity)\s*\{\s*allowed\s*:\s*\[([^\]]*)\]\s*\}|\[([^\]]*)\]|([_a-zA-Z0-9]+))/.exec(pBody);
             const propTypes: string[] = [];
             if (typesMatch) {
-                const rawT = typesMatch[1].split(',');
-                for (let rt of rawT) {
-                    rt = rt.trim().replace(/\{[^}]*\}/g, '').trim();
-                    if (rt) propTypes.push(rt);
+                const rawList = typesMatch[1] || typesMatch[2];
+                if (rawList) {
+                    const rawT = rawList.split(',');
+                    for (let rt of rawT) {
+                        rt = rt.trim().replace(/\{[^}]*\}/g, '').trim();
+                        if (rt) propTypes.push(rt);
+                    }
+                } else if (typesMatch[3]) {
+                    propTypes.push(typesMatch[3].trim());
                 }
             }
 
@@ -1955,6 +2104,8 @@ function renderLibrarySymbolHover(sym: LibrarySymbol, allSymbols: Map<string, Li
 // ============================================================================
 
 function registerFallbackProviders(context: ExtensionContext) {
+    if (fallbackProvidersRegistered) return;
+    fallbackProvidersRegistered = true;
     extensionContext = context;
     const symbolProvider: DocumentSymbolProvider = {
         provideDocumentSymbols(document: TextDocument): DocumentSymbol[] {
@@ -2143,7 +2294,15 @@ function registerFallbackProviders(context: ExtensionContext) {
                 }
             }
 
-            // 2. Built-in scalar types
+            // 2. Type definitions from schemas (checked before built-in fallbacks)
+            if (!isFollowedByColon) {
+                const matchedType = allTypes.get(word) || (TYPE_ALIASES[word] ? allTypes.get(TYPE_ALIASES[word]) : undefined);
+                if (matchedType) {
+                    return new Hover(renderTypeHover(matchedType, allTypes));
+                }
+            }
+
+            // 3. Built-in scalar types fallback
             if (BUILTIN_SCALARS[word]) {
                 return createCompactHover(undefined, BUILTIN_SCALARS[word]);
             }
@@ -2151,14 +2310,6 @@ function registerFallbackProviders(context: ExtensionContext) {
             // Keyword: in
             if (word === 'in') {
                 return createCompactHover('keyword in', '### Keyword: `in`\n\nSpecifies the iteration domain or range in generator array declarations (e.g. `[Index in 0:8]`).');
-            }
-
-            // 3. Type definitions (only if not followed by colon / not a property key)
-            if (!isFollowedByColon) {
-                const matchedType = allTypes.get(word);
-                if (matchedType) {
-                    return new Hover(renderTypeHover(matchedType, allTypes));
-                }
             }
 
             // 4. Property Keys fallback
@@ -2560,11 +2711,14 @@ function registerFallbackProviders(context: ExtensionContext) {
 
             const keywords = [
                 '_domainDefinition', 'gameDefinition', 'module', 'reaction', 'loop',
-                'state', 'transition', 'action', 'platformModule', 'signal', 'switch', 'trigger',
+                'state', 'transition', 'action', 'platformModule', 'signal', 'switch', 'trigger', 'alias',
                 'mainInputPort', 'mainOutputPort', 'propertyInputPort', 'propertyOutputPort',
                 'import', 'use', 'version', 'streamRate', 'in', 'on', 'off', 'none',
+                'Int', 'UInt', 'Real', 'Size', 'Int8', 'Int16', 'Int32', 'Int64',
+                'UInt8', 'UInt16', 'UInt32', 'UInt64', 'Float32', 'Float64', 'Switch', 'String',
+                '_NumericTypes', '_IntegerTypes', '_FloatTypes', '_DataTypes',
                 '_IntType', '_RealType', '_SwitchType', '_StateType',
-                'default:', 'reset:', 'domain:', 'type:', 'rate:', 'meta:',
+                'default:', 'reset:', 'domain:', 'type:', 'rate:', 'meta:', 'entity:',
                 'framework:', 'inputs:', 'outputs:', 'states:', 'transitions:', 'guard:', 'targetState:',
                 'playerTypes:', 'supplies:', 'setupActions:', 'board:', 'stateMachines:', 'end:'
             ];
@@ -2789,6 +2943,90 @@ function registerFallbackProviders(context: ExtensionContext) {
                             `Undeclared Symbol '${tok}'`,
                             DiagnosticSeverity.Error
                         ));
+                    }
+                }
+
+                // 5. Validate Lossy Conversions in Streams (Warning severity with squiggly lines)
+                const stages = stmtText.split(/\s*>>\s*/);
+                if (stages.length >= 2) {
+                    const resolveOperandType = (operand: string): { type?: string; isLiteral?: boolean; literalVal?: string } => {
+                        const trimmed = operand.trim();
+                        if (/^[+-]?\d+\.\d+$/.test(trimmed)) {
+                            return { type: 'Real', isLiteral: true, literalVal: trimmed };
+                        }
+                        if (/^[+-]?\d+$/.test(trimmed)) {
+                            return { type: 'Int', isLiteral: true, literalVal: trimmed };
+                        }
+                        if (trimmed === 'on' || trimmed === 'off') {
+                            return { type: 'Switch', isLiteral: true, literalVal: trimmed };
+                        }
+                        const idMatch = /^([_a-zA-Z0-9]+)/.exec(trimmed);
+                        if (idMatch) {
+                            const symName = idMatch[1];
+                            const decl = findDeclarationInScopeStack(symName, scopeStack);
+                            if (decl) {
+                                return { type: decl.type || 'Real' };
+                            }
+                        }
+                        const binMatch = /(.+?)\s*([\+\-\*\/])\s*(.+)/.exec(trimmed);
+                        if (binMatch) {
+                            const left = resolveOperandType(binMatch[1]);
+                            const right = resolveOperandType(binMatch[3]);
+                            if (left.type && right.type) {
+                                const leftInfo = DATA_TYPE_MAP[left.type];
+                                const rightInfo = DATA_TYPE_MAP[right.type];
+                                if (leftInfo && rightInfo) {
+                                    if (leftInfo.kind === 'float' || rightInfo.kind === 'float') {
+                                        const promoted = (leftInfo.bits || 64) >= (rightInfo.bits || 64) ? (leftInfo.kind === 'float' ? left.type : right.type) : right.type;
+                                        return { type: promoted };
+                                    }
+                                    const s1 = leftInfo.signed ?? true;
+                                    const s2 = rightInfo.signed ?? true;
+                                    const b1 = leftInfo.bits || 32;
+                                    const b2 = rightInfo.bits || 32;
+                                    if (s1 === s2) {
+                                        return { type: b1 >= b2 ? left.type : right.type };
+                                    }
+                                    const signedBits = s1 ? b1 : b2;
+                                    const unsignedBits = s1 ? b2 : b1;
+                                    if (signedBits > unsignedBits) {
+                                        return { type: s1 ? left.type : right.type };
+                                    }
+                                    const neededBits = unsignedBits * 2;
+                                    if (neededBits <= 16) return { type: 'Int16' };
+                                    if (neededBits <= 32) return { type: 'Int32' };
+                                    return { type: 'Int64' };
+                                }
+                            }
+                        }
+                        return {};
+                    };
+
+                    for (let stageIdx = 0; stageIdx < stages.length - 1; stageIdx++) {
+                        const srcStr = stages[stageIdx];
+                        const dstStr = stages[stageIdx + 1];
+                        const srcInfo = resolveOperandType(srcStr);
+                        const dstInfo = resolveOperandType(dstStr);
+
+                        if (dstInfo.type) {
+                            let riskMsg: string | null = null;
+                            if (srcInfo.isLiteral && srcInfo.literalVal !== undefined) {
+                                riskMsg = getLiteralConversionRisk(srcInfo.literalVal, dstInfo.type);
+                            } else if (srcInfo.type) {
+                                riskMsg = getConversionRisk(srcInfo.type, dstInfo.type);
+                            }
+
+                            if (riskMsg) {
+                                const stmtGlobalIndex = sStart + 1 + stmtMatch.index;
+                                const startPos = document.positionAt(stmtGlobalIndex);
+                                const endPos = document.positionAt(stmtGlobalIndex + stmtMatch[0].length);
+                                diagnostics.push(new Diagnostic(
+                                    new Range(startPos, endPos),
+                                    `Warning: Conversion from '${srcInfo.type || 'literal'}' to '${dstInfo.type}' ${riskMsg}`,
+                                    DiagnosticSeverity.Warning
+                                ));
+                            }
+                        }
                     }
                 }
             }
@@ -3194,7 +3432,7 @@ function registerDebugAndExecutionCommands(context: ExtensionContext): void {
     );
 }
 
-export function activate(context: ExtensionContext) {
+export async function activate(context: ExtensionContext) {
     extensionContext = context;
 
     // Register F5 debugging and compilation commands
@@ -3218,19 +3456,24 @@ export function activate(context: ExtensionContext) {
     const serverOptions: ServerOptions = {
         command: serverExecutable,
         args: effectiveStrideroot ? [`--strideroot=${effectiveStrideroot}`] : [],
-        transport: TransportKind.stdio,
-        options: effectiveStrideroot ? {
-            env: {
-                ...process.env,
-                STRIDEROOT: effectiveStrideroot
-            }
-        } : undefined
+        transport: TransportKind.stdio
     };
 
     const clientOptions: LanguageClientOptions = {
         documentSelector: [{ scheme: 'file', language: 'stride' }],
         synchronize: {
             fileEvents: workspace.createFileSystemWatcher('**/*.stride')
+        },
+        errorHandler: {
+            error: (error, message, count) => {
+                console.error('Stride LSP error:', error, message, count);
+                return { action: ErrorAction.Continue };
+            },
+            closed: () => {
+                console.warn('Stride LSP server connection closed. Activating fallback providers.');
+                registerFallbackProviders(context);
+                return { action: CloseAction.DoNotRestart };
+            }
         }
     };
 
@@ -3241,10 +3484,15 @@ export function activate(context: ExtensionContext) {
         clientOptions
     );
 
-    client.start().catch(err => {
+    context.subscriptions.push(client);
+
+    try {
+        await client.start();
+    } catch (err) {
+        console.error('Stride LSP server start error:', err);
         window.showWarningMessage(`Stride LSP server start error: ${err}. Falling back to built-in provider.`);
         registerFallbackProviders(context);
-    });
+    }
 }
 
 export function deactivate(): Thenable<void> | undefined {

@@ -3,15 +3,14 @@ type _PlatformModulePortType {
 	properties: [
 		typeProperty Name {
 			name: "name"
-			types: [""]
-			default: none
+			allowedTypes: _StringLiteral
 			required: on
 		}
 		typeProperty Default {
 			name: "default"
-			types: [""]
+			allowedTypes: constrainedEntity { allowed: [_Any, _NoneLiteral] }
 			default: none
-			required: on
+			required: off
 		}
 	]
 
@@ -22,120 +21,121 @@ type _PlatformCodeType {
 	properties: [
 		typeProperty Include {
 			name: "include"
-			types: [""] #TODO accepts list
+			allowedTypes: constrainedList { allowed: [_StringLiteral] }
 			default: []
 			required: off
 		},
 		typeProperty IncludeDir {
 			name: "includeDir"
-			types: [""] #TODO accepts list
+			allowedTypes: constrainedList { allowed: [_StringLiteral] }
 			default: []
 			required: off
 		},
 		typeProperty LinkTo {
 			name: "linkTo"
-			types: [""] #TODO accepts list
+			allowedTypes: constrainedList { allowed: [_StringLiteral] }
 			default: []
 			required: off
 		},
 		typeProperty LinkDir {
 			name: "linkDir"
-			types: [""] #TODO accepts list
+			allowedTypes: constrainedList { allowed: [_StringLiteral] }
 			default: []
 			required: off
 		},
 		typeProperty Resources {
 			name: "resources"
-			types: [""]
+			allowedTypes: constrainedList { allowed: [_ResourceType, _DomainResourceType, _StringLiteral] }
 			default: []
 			required: off
 			meta: "List of resources required by this object"
 		},
 		typeProperty GlobalDeclarations {
 			name: "globalDeclarations"
-			types: [""] #TODO validate list
+			allowedTypes: constrainedList { allowed: [_StringLiteral] }
 			default: []
 			required: off
 		},
 		typeProperty GlobalInitializations {
 			name: "globalInitializations"
-			types: [""] #TODO validate list
+			allowedTypes: constrainedList { allowed: [_StringLiteral] }
 			default: []
 			required: off
 		},
 		typeProperty Declarations {
 			name: "declarations"
-			types: [""] #TODO validate list
+			allowedTypes: constrainedList { allowed: [_StringLiteral] }
 			default: []
 			required: off
 		},
 		typeProperty Constructors {
 			name: "constructors"
-			types: [""] #TODO validate list
+			allowedTypes: constrainedList { allowed: [_StringLiteral] }
 			default: []
 			required: off
 		},
 		typeProperty Initializations {
 			name: "initializations"
-			types: [""] #TODO validate list
+			allowedTypes: constrainedList { allowed: [_StringLiteral] }
 			default: []
 			required: off
 		},
 		typeProperty PreProcessingOnce {
 			name: "preProcessingOnce"
-			types: [_StringLiteral]
+			allowedTypes: _StringLiteral
 			default: ""
 			required: off
 		},
 		typeProperty PreProcessing {
 			name: "preProcessing"
-			types: [_StringLiteral]
+			allowedTypes: _StringLiteral
 			default: ""
 			required: off
 		},
 		typeProperty Processing {
 			name: "processing"
-			types: [_StringLiteral]
+			allowedTypes: _StringLiteral
 			default: ""
 			required: off
 		},
 		typeProperty PostProcessing {
 			name: "postProcessing"
-			types: [_StringLiteral]
+			allowedTypes: _StringLiteral
 			default: ""
 			required: off
 		},
 		typeProperty PostProcessingOnce {
 			name: "postProcessingOnce"
-			types: [_StringLiteral]
+			allowedTypes: _StringLiteral
 			default: ""
 			required: off
 		},
 		typeProperty Cleanup {
 			name: "cleanup"
-			types: [_StringLiteral]
+			allowedTypes: _StringLiteral
 			default: ""
 			required: off
 		},
 		typeProperty OutTokens {
 			name: "outTokens"
-			types: [_StringLiteral]
+			allowedTypes: constrainedList { allowed: [_StringLiteral] }
 			default: []
 			required: off
 		},
 		typeProperty Domain {
 			name: "domain"
-			types: [""] #
+			allowedTypes: constrainedEntity { allowed: [_DomainDefinition, _StringLiteral, _NoneLiteral] }
 			default: none
 			required: off
 		},
 		typeProperty AllowedDomains {
 			name: "allowedDomains"
-			types: [""] #
-			default: none
+			allowedTypes: constrainedList { allowed: [_DomainDefinition, _StringLiteral] }
+			default: []
 			required: off
 		}
 	]
+	inherits: [_Base]
 }
 
 type _PlatformModuleType {
@@ -143,25 +143,25 @@ type _PlatformModuleType {
 	properties: [
 		typeProperty Inputs {
 			name: "inputs"
-			types: [""] #TODO accepts list
+			allowedTypes: constrainedList { allowed: [_DataTypes, _Variadic, _PlatformModulePortType, _Port, _StringLiteral] }
 			default: []
 			required: off
 		},
 		typeProperty Outputs {
 			name: "outputs"
-			types: [""]
+			allowedTypes: constrainedList { allowed: [_DataTypes, _Variadic, _PlatformModulePortType, _Port, _StringLiteral] }
 			default: []
 			required: off
 		},
 		typeProperty Ports {
 			name: "ports"
-			types: [""]
+			allowedTypes: constrainedList { allowed: [_DataTypes, _Variadic, _PlatformModulePortType, _Port, _StringLiteral] }
 			default: []
 			required: off
 		},
 		typeProperty Properties {
 			name: "propertiesConstraints"
-			types: [""]
+			allowedTypes: constrainedList { allowed: [_TypeProperty, _Constraint, _Any] }
 			default: []
 			required: off
 			meta: "This will validate constraints for property input"
@@ -175,13 +175,12 @@ type _PlatformBlockType {
 	properties: [ 
 		typeProperty TypeName {
 			name: "typeName"
-			types: [_StringLiteral]
-			default: none
+			allowedTypes: _StringLiteral
 			required: on
 		},
         typeProperty Rate {
 			name: "rate"
-			types: [""] #
+			allowedTypes: constrainedEntity { allowed: [_IntLiteral, _RealLiteral, _NoneLiteral] }
 			default: -1
 			required: off
 		}
@@ -195,38 +194,36 @@ type _PlatformType {
 	properties: [
 		typeProperty Framework {
 			name: "framework"
-			types: [_StringLiteral]
-			default: none
+			allowedTypes: _StringLiteral
 			required: on
 		},
 		typeProperty FrameworkVersion {
 			name: "frameworkVersion"
-			types: [_StringLiteral]
+			allowedTypes: constrainedEntity { allowed: [_StringLiteral, _NoneLiteral] }
 			default: none
 			required: off
 		},
 		typeProperty Hardware {
 			name: "hardware"
-			types: [_StringLiteral]
+			allowedTypes: constrainedEntity { allowed: [_StringLiteral, _NoneLiteral] }
 			default: none
 			required: off
 		},
 		typeProperty HardwareVersion {
 			name: "hardwareVersion"
-			types: [_StringLiteral]
+			allowedTypes: constrainedEntity { allowed: [_StringLiteral, _NoneLiteral] }
 			default: none
 			required: off
 		},
 		typeProperty RootNamespace {
 			name: "rootNamespace"
-			types: [_StringLiteral]
+			allowedTypes: _StringLiteral
 			default: ""
 			required: off
 		},
 		typeProperty Required {
 			name: "required"
-			types: [_SwitchLiteral]
-			default: none
+			allowedTypes: _SwitchLiteral
 			required: on
 		}
 	]
@@ -237,25 +234,24 @@ type _FrameworkDescriptionType {
 	properties: [
 		typeProperty FrameworkName {
 			name: "frameworkName"
-			types: [_StringLiteral]
-			default: none
+			allowedTypes: _StringLiteral
 			required: on
 		},
 		typeProperty DefaultDataType {
 			name: "defaultDataType"
-			types: [""]
-			default: _RealType
+			allowedTypes: constrainedEntity { allowed: [_DataTypes, _StringLiteral] }
+			default: Real
 			required: off
 		},
 		typeProperty Inherits {
 			name: "inherits"
-			types: [_StringLiteral, ""]
+			allowedTypes: constrainedEntity { allowed: [_StringLiteral, _NoneLiteral] }
 			default: none
 			required: off
 		},
 		typeProperty InheritsVersion {
 			name: "inheritsVersion"
-			types: [_StringLiteral, ""]
+			allowedTypes: constrainedEntity { allowed: [_StringLiteral, _NoneLiteral] }
 			default: none
 			required: off
 		}
@@ -268,50 +264,44 @@ type _ConnectionType {
 	properties: [
 		typeProperty SourceFramework {
 			name: "sourceFramework"
-			types: [""]
-			default: none
+			allowedTypes: constrainedEntity { allowed: [_PlatformType, _StringLiteral, _Any] }
 			required: on
 		},
 		typeProperty SourceDomains {
 			name: "sourceDomains"
-			types: [""]
-			default: none
+			allowedTypes: constrainedList { allowed: [_StringLiteral, _DomainDefinition] }
 			required: on
 		},
 		typeProperty DestinationFramework {
 			name: "destinationFramework"
-			types: [""]
-			default: none
+			allowedTypes: constrainedEntity { allowed: [_PlatformType, _StringLiteral, _Any] }
 			required: on
 		},
 		typeProperty DestinationDomains {
 			name: "destinationDomains"
-			types: [""]
-			default: none
+			allowedTypes: constrainedList { allowed: [_StringLiteral, _DomainDefinition] }
 			required: on
 		},
 		typeProperty SourceImports {
 			name: "sourceImports"
-			types: [""]
-			default: none
+			allowedTypes: constrainedList { allowed: [_StringLiteral] }
+			default: []
 			required: off
 		},
 		typeProperty SourceStreams {
 			name: "sourceStreams"
-			types: [""]
-			default: none
+			allowedTypes: constrainedList { allowed: [_StreamType] }
 			required: on
 		},
 		typeProperty DestinationImports {
 			name: "destinationImports"
-			types: [""]
-			default: none
+			allowedTypes: constrainedList { allowed: [_StringLiteral] }
+			default: []
 			required: off
 		},
 		typeProperty DestinationStreams {
 			name: "destinationStreams"
-			types: [""]
-			default: none
+			allowedTypes: constrainedList { allowed: [_StreamType] }
 			required: on
 		}
 	]
@@ -322,13 +312,13 @@ type _SystemType {
 	properties: [
 		typeProperty Platforms {
 			name: "platforms"
-			types: [_PlatformSpec]
+			allowedTypes: constrainedList { allowed: [_PlatformType, _StringLiteral, _Any] }
 			required: on
 		},
         typeProperty Connections {
 			name: "connections"
-			types: [_ConnectionType]
-			default: none
+			allowedTypes: constrainedList { allowed: [_ConnectionType] }
+			default: []
 			required: off
 		}
 	]
@@ -338,29 +328,51 @@ type _PlatformOperatorType {
 	typeName: "platformOperator"
 
 	properties: [
-		typeProperty LeftDataTypesProperty {
-			name: "leftDataTypes"
-			types: [""]
-			default: []
-			required: on
-			meta: "Allowed data types for left element"
-		}
-		typeProperty LeftDataTypesProperty {
-			name: "rightDataTypes"
-			types: [""]
+		typeProperty Type {
+			name: "type"
+			allowedTypes: constrainedEntity { allowed: [_StringLiteral, _NoneLiteral] }
 			default: none
 			required: off
+		},
+		typeProperty LeftTypesProperty {
+			name: "leftTypes"
+			allowedTypes: constrainedList { allowed: [_Base, _StringLiteral, _Any] }
+			default: []
+			required: off
+		},
+		typeProperty RightTypesProperty {
+			name: "rightTypes"
+			allowedTypes: constrainedList { allowed: [_Base, _StringLiteral, _Any] }
+			default: []
+			required: off
+		},
+		typeProperty OutTypesProperty {
+			name: "outTypes"
+			allowedTypes: constrainedList { allowed: [_Base, _StringLiteral, _Any] }
+			default: []
+			required: off
+		},
+		typeProperty LeftDataTypesProperty {
+			name: "leftDataTypes"
+			allowedTypes: constrainedList { allowed: [_Base, _StringLiteral, _Any] }
+			default: []
+			required: off
+			meta: "Allowed data types for left element"
+		},
+		typeProperty RightDataTypesProperty {
+			name: "rightDataTypes"
+			allowedTypes: constrainedList { allowed: [_Base, _StringLiteral, _Any] }
+			default: []
+			required: off
 			meta: "Allowed data types for right element. Leave as none if unary operator"
-		}
+		},
 		typeProperty OutDataTypesProperty {
 			name: "outDataTypes"
-			types: [""]
+			allowedTypes: constrainedList { allowed: [_Base, _StringLiteral, _Any] }
 			default: []
-			required: on
+			required: off
 			meta: "Resulting data type from operation"
 		}
-
-
 	]
 	inherits: [_PlatformCodeType]
 }

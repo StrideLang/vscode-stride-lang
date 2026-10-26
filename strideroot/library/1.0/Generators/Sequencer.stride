@@ -10,7 +10,6 @@ module Sequencer {
         propertyInputPort ValuesPort {
             name: "values"
             block: Values
-            default: []
             meta: "Values in the sequencer"
         }
     ]
@@ -22,7 +21,7 @@ module Sequencer {
         signal Counter {
             default: 0
             domain: InputPort.domain
-            type: _SizeType
+            type: Size
             reset: CounterReset
         }
         constant Values[ValuesPort.size] {

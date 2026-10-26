@@ -1,0 +1,167 @@
+# Logic.stride
+# Boolean logic operations and conditional multiplexing for Stride
+
+module Select {
+    ports: [
+        mainInputPort InputPort {
+            block: Input
+            meta: "Default signal flowing along the primary path"
+        },
+        mainOutputPort OutputPort {
+            block: Output
+            meta: "Selected output signal"
+        },
+        propertyInputPort ConditionProperty {
+            name: "condition"
+            block: Condition
+            meta: "Switch condition determining which value is output"
+        },
+        propertyInputPort WhenOnProperty {
+            name: "whenOn"
+            block: WhenOn
+            meta: "Signal produced when Condition is on"
+        },
+        propertyInputPort WhenOffProperty {
+            name: "whenOff"
+            block: WhenOff
+            meta: "Signal produced when Condition is off (defaults to Input if not specified)"
+        }
+    ]
+    blocks: [
+        signal Input     { domain: OutputPort.domain }
+        signal Output    { domain: OutputPort.domain }
+        switch Condition { domain: OutputPort.domain }
+        signal WhenOn    { domain: OutputPort.domain }
+        signal WhenOff   { domain: OutputPort.domain default: Input }
+    ]
+    streams: [
+        [Condition, WhenOn, WhenOff] >> __Select() >> Output;
+    ]
+    meta: "Selects between whenOn and whenOff signals based on a switch condition: Input >> Select(condition: Cond whenOn: Alt whenOff: Input) >> Output."
+}
+
+module And {
+    ports: [
+        mainInputPort InputPort {
+            block: Input
+            meta: "Two-element switch list: [A, B]"
+        },
+        mainOutputPort OutputPort {
+            block: Output
+            meta: "Switch output of A AND B"
+        }
+    ]
+    blocks: [
+        switch Input[2] { domain: OutputPort.domain },
+        switch Output   { domain: OutputPort.domain }
+    ]
+    streams: [
+        [Input[0], Input[1]] >> __And() >> Output;
+    ]
+    meta: "Logical AND operation on switch inputs: [A, B] >> And() >> Out."
+}
+
+module Or {
+    ports: [
+        mainInputPort InputPort {
+            block: Input
+            meta: "Two-element switch list: [A, B]"
+        },
+        mainOutputPort OutputPort {
+            block: Output
+            meta: "Switch output of A OR B"
+        }
+    ]
+    blocks: [
+        switch Input[2] { domain: OutputPort.domain },
+        switch Output   { domain: OutputPort.domain }
+    ]
+    streams: [
+        [Input[0], Input[1]] >> __Or() >> Output;
+    ]
+    meta: "Logical OR operation on switch inputs: [A, B] >> Or() >> Out."
+}
+
+module Not {
+    ports: [
+        mainInputPort InputPort {
+            block: Input
+            meta: "Switch input to invert"
+        },
+        mainOutputPort OutputPort {
+            block: Output
+            meta: "Inverted switch output"
+        }
+    ]
+    blocks: [
+        switch Input  { domain: OutputPort.domain },
+        switch Output { domain: OutputPort.domain }
+    ]
+    streams: [
+        Input >> __Not() >> Output;
+    ]
+    meta: "Logical NOT operation: inverts a switch input."
+}
+
+module Xor {
+    ports: [
+        mainInputPort InputPort {
+            block: Input
+            meta: "Two-element switch list: [A, B]"
+        },
+        mainOutputPort OutputPort {
+            block: Output
+            meta: "Switch output of A XOR B"
+        }
+    ]
+    blocks: [
+        switch Input[2] { domain: OutputPort.domain },
+        switch Output   { domain: OutputPort.domain }
+    ]
+    streams: [
+        [Input[0], Input[1]] >> __Xor() >> Output;
+    ]
+    meta: "Logical exclusive OR (XOR) operation on switch inputs: [A, B] >> Xor() >> Out."
+}
+
+module Nand {
+    ports: [
+        mainInputPort InputPort {
+            block: Input
+            meta: "Two-element switch list: [A, B]"
+        },
+        mainOutputPort OutputPort {
+            block: Output
+            meta: "Switch output of A NAND B"
+        }
+    ]
+    blocks: [
+        switch Input[2] { domain: OutputPort.domain },
+        switch Output   { domain: OutputPort.domain }
+    ]
+    streams: [
+        [Input[0], Input[1]] >> __Nand() >> Output;
+    ]
+    meta: "Logical NAND operation on switch inputs: [A, B] >> Nand() >> Out."
+}
+
+module Nor {
+    ports: [
+        mainInputPort InputPort {
+            block: Input
+            meta: "Two-element switch list: [A, B]"
+        },
+        mainOutputPort OutputPort {
+            block: Output
+            meta: "Switch output of A NOR B"
+        }
+    ]
+    blocks: [
+        switch Input[2] { domain: OutputPort.domain },
+        switch Output   { domain: OutputPort.domain }
+    ]
+    streams: [
+        [Input[0], Input[1]] >> __Nor() >> Output;
+    ]
+    meta: "Logical NOR operation on switch inputs: [A, B] >> Nor() >> Out."
+}

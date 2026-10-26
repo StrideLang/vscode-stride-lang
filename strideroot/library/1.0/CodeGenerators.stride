@@ -1,0 +1,74 @@
+type _CodeGenerator {
+	typeName: "codeGenerator"
+	properties: [
+		typeProperty {
+			name: "blocks"
+			allowedTypes: constrainedList { allowed: [_Streamable, _Reaction, _Module] }
+			default: []
+			required: off
+		},
+		typeProperty Streams {
+			name: "streams"
+			allowedTypes: constrainedList { allowed: [_StreamType] }
+			required: on
+		}
+	]
+}
+
+type _Module {
+	typeName: "module"
+	properties: [
+		typeProperty Contraints {
+			name: "constraints"
+			allowedTypes: constrainedList { allowed: [_StreamType, _Constraint, _Any] }
+			default: []
+			required: off
+		}
+	]
+	inherits: [_Base, _CodeGenerator, _Callable]
+	meta: "Modules encapsulate streams"
+}
+
+type _Reaction {
+	typeName: "reaction"
+	properties: [
+		typeProperty Contraints {
+			name: "constraints"
+			allowedTypes: constrainedList { allowed: [_StreamType, _Constraint, _Any] }
+			default: []
+			required: off
+		}
+	]
+	inherits: [_Base, _DomainMember, _CodeGenerator, _Callable]
+}
+
+type _Loop {
+	typeName: "loop"
+	properties: [
+		typeProperty OnExecution {
+			name: "onExecution"
+			allowedTypes: constrainedEntity { allowed: [_StreamType, _Streamable, _Reaction, _NoneLiteral] }
+			default: none
+			required: off
+		},
+		typeProperty OnTermination {
+			name: "onTermination"
+			allowedTypes: constrainedEntity { allowed: [_StreamType, _Streamable, _Reaction, _NoneLiteral] }
+			default: none
+			required: off
+		},
+		typeProperty TerminateWhen {
+			name: "terminateWhen"
+			allowedTypes: constrainedEntity { allowed: [_StreamType, _Streamable, _Switch, _Signal, _NoneLiteral] }
+			default: none
+			required: off
+		},
+		typeProperty Contraints {
+			name: "constraints"
+			allowedTypes: constrainedList { allowed: [_StreamType, _Constraint, _Any] }
+			default: []
+			required: off
+		}
+	]
+	inherits: [_Base, _DomainMember, _CodeGenerator, _Callable]
+}

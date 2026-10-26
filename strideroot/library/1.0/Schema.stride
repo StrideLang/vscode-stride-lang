@@ -1,0 +1,244 @@
+# Schema definition and validation types
+
+type _Any {
+	typeName: "_any"
+	properties: []
+	meta: "Matches any single element (scalar, block, or expression; excludes lists)."
+}
+
+type _List {
+	typeName: "_list"
+	properties: []
+	meta: "Matches any collection (list literal or array slice/bundle)."
+}
+
+type _Block {
+	typeName: "_block"
+	properties: []
+	meta: "Matches any block entity declaration (signal, switch, buffer, table, etc., scalar or bundle)."
+}
+
+type _Constraint {
+	# Constraints get a special treatment in validation.
+	# This type serves to mark declarations as constraints for special treatment
+    typeName: "_constraint"
+    properties: [
+		typeProperty {
+			name: "constraint"
+			allowedTypes: constrainedEntity { allowed: [_StringLiteral, _NoneLiteral] }
+			default: none
+			required: off
+		}
+	]
+    inherits: [_Base]
+}
+
+type _ConstrainedInt {
+    typeName: "constrainedInt"
+    properties: [
+		typeProperty {
+			name: "multipleOf"
+			allowedTypes: constrainedEntity { allowed: [_IntLiteral, _NoneLiteral] }
+			default: none
+			required: off
+		}		
+		typeProperty {
+			name: "maximum"
+			allowedTypes: constrainedEntity { allowed: [_IntLiteral, _NoneLiteral] }
+			default: none
+			required: off
+		}		
+		typeProperty {
+			name: "exclusiveMaximum"
+			allowedTypes: constrainedEntity { allowed: [_IntLiteral, _NoneLiteral] }
+			default: none
+			required: off
+		}		
+		typeProperty {
+			name: "minimum"
+			allowedTypes: constrainedEntity { allowed: [_IntLiteral, _NoneLiteral] }
+			default: none
+			required: off
+		}	
+		typeProperty {
+			name: "exclusiveMinimum"
+			allowedTypes: constrainedEntity { allowed: [_IntLiteral, _NoneLiteral] }
+			default: none
+			required: off
+		}
+    ]
+	inherits: [_Constraint]
+}
+
+type _ConstrainedString {
+    typeName: "constrainedString"
+    properties: [	
+		typeProperty {
+			name: "maxLength"
+			allowedTypes: constrainedEntity { allowed: [_IntLiteral, _NoneLiteral] }
+			default: none
+			required: off
+		}		
+		typeProperty {
+			name: "minLength"
+			allowedTypes: constrainedEntity { allowed: [_IntLiteral, _NoneLiteral] }
+			default: none
+			required: off
+		}
+    ]
+	inherits: [_Constraint]
+}
+
+type _ConstrainedReal {
+    typeName: "constrainedReal"
+    properties: [
+		typeProperty {
+			name: "maximum"
+			allowedTypes: constrainedEntity { allowed: [_IntLiteral, _RealLiteral, _NoneLiteral] }
+			default: none
+			required: off
+		}		
+		typeProperty {
+			name: "exclusiveMaximum"
+			allowedTypes: constrainedEntity { allowed: [_IntLiteral, _RealLiteral, _NoneLiteral] }
+			default: none
+			required: off
+		}		
+		typeProperty {
+			name: "minimum"
+			allowedTypes: constrainedEntity { allowed: [_IntLiteral, _RealLiteral, _NoneLiteral] }
+			default: none
+			required: off
+		}	
+		typeProperty {
+			name: "exclusiveMinimum"
+			allowedTypes: constrainedEntity { allowed: [_IntLiteral, _RealLiteral, _NoneLiteral] }
+			default: none
+			required: off
+		}
+    ]
+    inherits: [_Constraint]
+}
+
+type _ConstrainedList {
+    typeName: "constrainedList"
+    properties: [
+		typeProperty {
+			name: "maxItems"
+			allowedTypes: constrainedEntity { allowed: [_IntLiteral, _NoneLiteral] }
+			default: none
+			required: off
+		}		
+		typeProperty {
+			name: "minItems"
+			allowedTypes: constrainedEntity { allowed: [_IntLiteral, _NoneLiteral] }
+			default: none
+			required: off
+		}
+		typeProperty {
+			name: "uniqueItems"
+			allowedTypes: _SwitchLiteral
+			default: off
+			required: off
+		}
+		typeProperty {
+			name: "allowed"
+			allowedTypes: constrainedList { allowed: [_Any] }
+			default: []
+			required: off
+		}	
+    ]
+    inherits: [_Constraint]
+}
+
+type _ConstrainedEntity {
+    typeName: "constrainedEntity"
+    properties: [
+		typeProperty {
+			name: "allowed"
+			allowedTypes: constrainedList { allowed: [_Base, _Constraint, _Any] }
+			default: []
+			required: off
+		}
+    ]
+    inherits: [_Constraint]
+    meta: "Accepts a single scalar or entity matching any of the listed types."
+}
+
+type _TypeProperty {
+	typeName: "typeProperty"
+	properties: [
+		typeProperty Name {
+			name: "name"
+			allowedTypes: _StringLiteral
+			required: on
+		},
+		typeProperty Direction {
+			name: "direction"
+			allowedTypes: _StringLiteral
+			default: "output"
+			required: off
+		},
+		typeProperty AllowedTypes {
+			name: "allowedTypes"
+			allowedTypes: constrainedEntity { allowed: [_Any, _List] }
+			required: off
+		},
+		typeProperty Default {
+			name: "default"
+			allowedTypes: constrainedEntity { allowed: [_Any, _List] }
+			default: none
+			required: off
+		},
+		typeProperty Required {
+			name: "required"
+			allowedTypes: _SwitchLiteral
+			required: on
+		},
+		typeProperty Public { # TODO enforce
+			name: "public"
+			allowedTypes: _SwitchLiteral
+			default: on
+			required: off
+		},
+		typeProperty Writeable {
+			name: "writeable"
+			allowedTypes: _SwitchLiteral
+			default: on
+			required: off
+			meta: "Defines whether type is publicly writeable." # TODO enforce
+		}
+	]
+	inherits: [_Base]
+}
+
+type _Type {
+	typeName: "type"
+	properties: [
+		typeProperty TypeName {
+			name: "typeName"
+			allowedTypes: _StringLiteral
+			required: on
+		},
+		typeProperty Properties {
+			name: "properties"
+			allowedTypes: constrainedEntity { allowed: [_List, _NoneLiteral] }
+			default: none
+			required: off
+		},
+		typeProperty Inherits {
+			name: "inherits"
+			allowedTypes: _List
+			default: [_Base]
+			required: off
+		},
+		typeProperty Meta {
+			name: "meta"
+			allowedTypes: _StringLiteral
+			default: ""
+			required: off
+		}
+	]
+	inherits: []
+	meta: "type cannot inherit from '_Base' to avoid circular dependencies"
+}

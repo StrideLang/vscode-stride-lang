@@ -7,7 +7,6 @@ module DebugPrint {
 		propertyInputPort TriggerPort {
 			name: "trigger"
 			block: Trigger
-			default: on #TODO breaks if you remove this
 		}
 	]
     blocks: [
@@ -37,4 +36,73 @@ module Error {
 	]
 	streams: [
 	]
+}
+
+module Probe {
+	ports: [
+		mainInputPort InputPort {
+			name: "input"
+			block: Input
+			meta: "Signal to be probed and passed through"
+		}
+		mainOutputPort OutputPort {
+			name: "output"
+			block: Output
+			meta: "Pass-through of the input signal"
+		}
+		propertyInputPort LabelPort {
+			name: "label"
+			block: Label
+			meta: "Label identifier for the probe"
+		}
+	]
+	blocks: [
+		signal Input {},
+		signal Output {},
+		value Label { default: "Probe" },
+		reaction Tap {
+			streams: [
+				Input >> __DebugPrint();
+			]
+		}
+	]
+	streams: [
+		Input >> Output;
+		Input >> Tap();
+	]
+	meta: "Lightweight signal probe that non-intrusively monitors a stream while passing it through"
+}
+
+module Watch {
+	ports: [
+		mainInputPort InputPort {
+			name: "input"
+			block: Input
+			meta: "Signal to be watched and passed through"
+		}
+		mainOutputPort OutputPort {
+			name: "output"
+			block: Output
+			meta: "Pass-through of the input signal"
+		}
+		propertyInputPort LabelPort {
+			name: "label"
+			block: Label
+		}
+	]
+	blocks: [
+		signal Input {},
+		signal Output {},
+		value Label { default: "Watch" },
+		reaction Tap {
+			streams: [
+				Input >> __DebugPrint();
+			]
+		}
+	]
+	streams: [
+		Input >> Output;
+		Input >> Tap();
+	]
+	meta: "Signal watch module for non-intrusive runtime observation"
 }

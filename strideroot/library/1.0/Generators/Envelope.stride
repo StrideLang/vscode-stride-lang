@@ -12,18 +12,22 @@ module AD {
         }
         propertyInputPort AttackTimePort {
             name:       'attack'
-            default: 0.2
             block:      AttackTime
             meta:       "Attack time in seconds"
         }
         propertyInputPort DecayTimePort {
             name:       'decay'
-            default: 3.0
             block:      DecayTime
             meta:       "Decay time in seconds"
         }
     ]
     blocks:     [
+        signal AttackTime {
+            default:    0.2
+        }
+        signal DecayTime {
+            default:    3.0
+        }
         signal Output {
             default:    0.0
         }

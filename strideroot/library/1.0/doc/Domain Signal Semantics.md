@@ -25,7 +25,7 @@ A signal declaration establishes memory residency and processing behavior.
 * **Fractional / Non-Harmonic Rates:** Handled via asynchronous ring buffers with jitter compensation.
 
 ### 2.3 Temporal Driving Modes
-* **Periodic (Clock-Driven / Pull):** Evaluated deterministically on the domain’s tick schedule. Unwritten streams maintain their previous persistent state ($z^{-1}$).
+* **Periodic (Clock-Driven / Pull):** Evaluated deterministically on the domain’s tick schedule. Persistent signals maintain their previous persistent state ($z^{-1}$).
 * **Reactive (Push / Stream-Driven):** Execution is triggered by stream writes rather than a fixed clock.
   * *Any-Stream Trigger:* Processes immediately upon arrival of an update from any inbound stream.
   * *Barrier Trigger:* Waits until all converging inputs have delivered a sample before evaluating.

@@ -1,0 +1,205 @@
+# Control.stride
+# Signal-flow control, edge detection, and sample-and-hold operations for Stride
+
+module OnChange {
+    ports: [
+        mainInputPort InputPort {
+            block: Input
+            meta: "Signal or switch being monitored for changes"
+        },
+        mainOutputPort OutputPort {
+            block: Output
+            meta: "Switch that is on when Input changed from its previous tick value"
+        }
+    ]
+    blocks: [
+        signal Input {
+            rate: OutputPort.rate
+            type: InputPort.type
+            domain: OutputPort.domain
+        }
+        switch Output {
+            rate: OutputPort.rate
+            domain: OutputPort.domain
+        }
+        signal Prev{
+            rate: OutputPort.rate
+            type: InputPort.type
+            domain: OutputPort.domain
+        }
+    ]
+    streams: [
+        [Input, Prev] >> NotEqual() >> Output;
+        Input >> Prev;
+    ]
+    meta: "Detects changes in a signal: outputs on when Input differs from previous tick: Input >> OnChange() >> Trigger."
+}
+
+module RisingEdge {
+    ports: [
+        mainInputPort InputPort {
+            block: Input
+            meta: "Monitored switch signal"
+        },
+        mainOutputPort OutputPort {
+            block: Output
+            meta: "Switch that is on for one tick when Input transitions from off to on"
+        }
+    ]
+    blocks: [
+        switch Input   {
+            rate: OutputPort.rate
+            domain: OutputPort.domain
+        }
+        switch Output  {
+            rate: OutputPort.rate
+            domain: OutputPort.domain
+        }
+        switch Prev    {
+            rate: OutputPort.rate
+            domain: OutputPort.domain
+            default: off
+        }
+        switch NotPrev {
+            rate: OutputPort.rate
+            domain: OutputPort.domain
+        }
+    ]
+    streams: [
+        Prev >> Not() >> NotPrev;
+        [Input, NotPrev] >> And() >> Output;
+        Input >> Prev;
+    ]
+    meta: "Detects rising edge (off -> on): Input >> RisingEdge() >> Trigger."
+}
+
+module FallingEdge {
+    ports: [
+        mainInputPort InputPort {
+            block: Input
+            meta: "Monitored switch signal"
+        },
+        mainOutputPort OutputPort {
+            block: Output
+            meta: "Switch that is on for one tick when Input transitions from on to off"
+        }
+    ]
+    blocks: [
+        switch Input  {
+            rate: OutputPort.rate
+            domain: OutputPort.domain
+        }
+        switch Output {
+            rate: OutputPort.rate
+            domain: OutputPort.domain
+        }
+        switch Prev   {
+            rate: OutputPort.rate
+            domain: OutputPort.domain
+            default: off
+        }
+        switch NotIn  {
+            rate: OutputPort.rate
+            domain: OutputPort.domain
+        }
+    ]
+    streams: [
+        Input >> Not() >> NotIn;
+        [NotIn, Prev] >> And() >> Output;
+        Input >> Prev;
+    ]
+    meta: "Detects falling edge (on -> off): Input >> FallingEdge() >> Trigger."
+}
+
+module Latch {
+    ports: [
+        mainInputPort InputPort {
+            block: Input
+            meta: "Continuous signal to be sampled and held"
+        },
+        mainOutputPort OutputPort {
+            block: Output
+            meta: "Sampled and held output signal"
+        },
+        propertyInputPort TriggerProperty {
+            name: "trigger"
+            block: Trigger
+            meta: "Sample trigger: when on, samples Input; when off, holds previous value"
+        }
+    ]
+    blocks: [
+        signal Input   {
+            rate: OutputPort.rate
+            type: OutputPort.type
+            domain: OutputPort.domain
+        }
+        signal Output  {
+            rate: OutputPort.rate
+            type: OutputPort.type
+            domain: OutputPort.domain
+        }
+        switch Trigger {
+            rate: OutputPort.rate
+            domain: OutputPort.domain
+            default: off
+        }
+        signal Held    {
+            rate: OutputPort.rate
+            type: OutputPort.type
+            domain: OutputPort.domain
+            default: 0.0
+        }
+    ]
+    streams: [
+        [Trigger, Input, Held] >> __Select() >> Held;
+        Held >> Output;
+    ]
+    meta: "Sample and hold: samples Input when trigger is on and holds the value when off: Input >> Latch(trigger: Gate) >> Output."
+}
+
+module Smooth {
+    ports: [
+        mainInputPort InputPort {
+            block: Input
+            meta: "Signal to be smoothed"
+        },
+        mainOutputPort OutputPort {
+            block: Output
+            meta: "Smoothed output signal"
+        },
+        propertyInputPort CoeffProperty {
+            name: "coefficient"
+            block: Coeff
+            meta: "Smoothing coefficient between 0.0 (no smoothing) and 1.0 (freeze)"
+        }
+    ]
+    blocks: [
+        signal Input {
+            rate: OutputPort.rate
+            type: OutputPort.type
+            domain: OutputPort.domain
+        }
+        signal Output {
+            rate: OutputPort.rate
+            type: OutputPort.type
+            domain: OutputPort.domain
+        }
+        signal Coeff {
+            rate: OutputPort.rate
+            type: OutputPort.type
+            domain: OutputPort.domain
+            default: 0.95
+        }
+        signal Prev {
+            rate: OutputPort.rate
+            type: OutputPort.type
+            domain: OutputPort.domain
+            default: 0.0
+        }
+    ]
+    streams: [
+        (Input * (1.0 - Coeff)) + (Prev * Coeff) >> Output;
+        Output >> Prev;
+    ]
+    meta: "Applies first-order exponential smoothing to Input: Input >> Smooth(coefficient: 0.95) >> Output."
+}

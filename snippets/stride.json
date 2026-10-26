@@ -145,8 +145,8 @@
         "prefix": "platformModule",
         "body": [
             "platformModule ${1:__MyPlatformModule}@${2:Type} {",
-            "\tinputs: [${3:_IntType}]",
-            "\toutputs: [${4:_IntType}]",
+            "\tinputs: [${3:Int}]",
+            "\toutputs: [${4:Int}]",
             "\tprocessing: \"%%outtokens:0%% = ${5:llvm::add} %%intokens:0%%, %%intokens:1%%\"",
             "\tinherits: [_Signal]",
             "}",
@@ -154,10 +154,19 @@
         ],
         "description": "Create a platform module with LLVM IR processing"
     },
+    "Alias Declaration": {
+        "prefix": "alias",
+        "body": [
+            "alias ${1:Name} {",
+            "\tentity: ${2:Int32}",
+            "}"
+        ],
+        "description": "Declare a Stride type alias"
+    },
     "Signal Declaration": {
         "prefix": "signal",
         "body": [
-            "signal ${1:Name} { domain: ${2:RootDomain}, type: ${3:_RealType}, default: ${4:0.0} }"
+            "signal ${1:Name} { domain: ${2:RootDomain}, type: ${3:Real}, default: ${4:0.0} }"
         ],
         "description": "Declare a Stride signal"
     },
@@ -185,7 +194,7 @@
     "Array Signal Declaration": {
         "prefix": "signal-array",
         "body": [
-            "signal ${1:Name}[${2:Index} in ${3:0:8}] { domain: ${4:RootDomain}, type: ${5:_RealType} }"
+            "signal ${1:Name}[${2:Index} in ${3:0:8}] { domain: ${4:RootDomain}, type: ${5:Real} }"
         ],
         "description": "Declare a Stride array signal over a range"
     }

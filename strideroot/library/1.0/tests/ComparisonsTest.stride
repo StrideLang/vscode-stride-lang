@@ -1,0 +1,82 @@
+# ComparisonsTest.stride
+# Unit tests for strideroot/library/1.0/Comparisons.stride
+
+functionTest GreaterTest {
+    target: Greater
+    prepare: [
+        [ [ 5.0, 3.0 ], [ 2.0, 4.0 ], [ 1.0, 1.0 ] ] >> Input;
+    ]
+    validate: [
+        [ Output, [ on, off, off ] ] >> ExpectEqual();
+    ]
+}
+
+functionTest GreaterOrEqualTest {
+    target: GreaterOrEqual
+    prepare: [
+        [ [ 5.0, 3.0 ], [ 2.0, 4.0 ], [ 1.0, 1.0 ] ] >> Input;
+    ]
+    validate: [
+        [ Output, [ on, off, on ] ] >> ExpectEqual();
+    ]
+}
+
+functionTest LessTest {
+    target: Less
+    prepare: [
+        [ [ 5.0, 3.0 ], [ 2.0, 4.0 ], [ 1.0, 1.0 ] ] >> Input;
+    ]
+    validate: [
+        [ Output, [ off, on, off ] ] >> ExpectEqual();
+    ]
+}
+
+functionTest LessOrEqualTest {
+    target: LessOrEqual
+    prepare: [
+        [ [ 5.0, 3.0 ], [ 2.0, 4.0 ], [ 1.0, 1.0 ] ] >> Input;
+    ]
+    validate: [
+        [ Output, [ off, on, on ] ] >> ExpectEqual();
+    ]
+}
+
+functionTest EqualTest {
+    target: Equal
+    prepare: [
+        [ [ 5.0, 5.0 ], [ 2.0, 4.0 ], [ 0.0, 0.0 ] ] >> Input;
+    ]
+    validate: [
+        [ Output, [ on, off, on ] ] >> ExpectEqual();
+    ]
+}
+
+functionTest NotEqualTest {
+    target: NotEqual
+    prepare: [
+        [ [ 5.0, 5.0 ], [ 2.0, 4.0 ], [ 0.0, 0.0 ] ] >> Input;
+    ]
+    validate: [
+        [ Output, [ off, on, off ] ] >> ExpectEqual();
+    ]
+}
+
+functionTest AllOnTest {
+    target: AllOn
+    prepare: [
+        [ [ on, on, off ], [ off, on, on ], [ on, on, on ] ] >> AllOn_Input;
+    ]
+    validate: [
+        [ AllOn_Output, [ off, off, on ] ] >> ExpectEqual();
+    ]
+}
+
+functionTest AllOffTest {
+    target: AllOff
+    prepare: [
+        [ [ off, off, on ], [ on, on, off ], [ off, off, off ] ] >> AllOff_Input;
+    ]
+    validate: [
+        [ AllOff_Output, [ off, off, on ] ] >> ExpectEqual();
+    ]
+}

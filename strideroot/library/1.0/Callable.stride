@@ -13,12 +13,6 @@ type _MainOutputPort {
 type _PropertyInputPort {
 	typeName: "propertyInputPort"
 	properties: [
-		typeProperty Default {
-			name: "default"
-			types: [""]
-			default: none
-			required: off
-		}
 	]
 	inherits: [_Port, _PortAttributes]
 	meta: ""
@@ -27,12 +21,6 @@ type _PropertyInputPort {
 type _PropertyOutputPort {
 	typeName: "propertyOutputPort"
 	properties: [
-		typeProperty Default {
-			name: "default"
-			types: [""]
-			default: none
-			required: off
-		}
 	]
 	inherits: [_Port, _PortAttributes]
 	meta: ""
@@ -43,35 +31,43 @@ type _PortAttributes {
 	properties: [
 		typeProperty Rate {
 			name: "rate"
-			types: [""]
+			allowedTypes: constrainedEntity { allowed: [_RealLiteral, _IntLiteral, _NoneLiteral] }
 			default: 0
 			writeable: off
+			public: on
 			required: off
+			meta: "Rate of the block connected to the port, populated by the compiler from stream connections"
 		},
 		typeProperty Domain {
 			name: "domain"
-			types: [""] # This should be made to accept type handles
+			allowedTypes: constrainedEntity { allowed: [_StringLiteral, _DomainDefinition, _NoneLiteral] } # This should be made to accept type handles
 			default: none
 			writeable: off
+			public: on
 			required: off
+			meta: "Domain of the block connected to the port, populated by the compiler from stream connections"
 		},
 		typeProperty Type {
 			name: "type"
-			types: [""] # This should be made to accept type handles
+			allowedTypes: constrainedEntity { allowed: [_DataTypes, _NoneLiteral] }
 			default: none
 			writeable: off
+			public: on
 			required: off
+			meta: "Data type of the block connected to the port, populated by the compiler from stream connections"
 		},
 		typeProperty Size {
 			name: "size"
-			types: [""] # This should be made to accept type handles
+			allowedTypes: constrainedEntity { allowed: [_IntLiteral, _NoneLiteral] } # This should be made to accept type handles
 			default: none
 			writeable: off
+			public: on
 			required: off
+			meta: "Size of the block connected to the port, populated by the compiler from stream connections"
 		}
 	]
 	inherits: []
-	meta: "Port attributes should be set by the resolver, and only readable externally"
+	meta: "Port attributes are populated by the compiler from stream connections. They are read only (e.g. InputPort.type). Ports have no type or default: these come from the declaration of the bound block."
 }
 
 type _Port {
@@ -79,38 +75,21 @@ type _Port {
 	properties: [
 		typeProperty Name {
 			name: "name"
-			types: [_StringLiteral]
+			allowedTypes: _StringLiteral
 			default: ""
 			required: off
 		},
 		typeProperty Block {
 			name: "block"
-			types: [_Block]
-			default: none
+			allowedTypes: _Block
 			required: on
 		},
 		typeProperty Type {
-			name: "type"
-			types: [""] # This should be made to accept type handles
+			name: "allowedTypes"
+			allowedTypes: constrainedEntity { allowed: [_StringLiteral, _DataTypes, _NoneLiteral] } # This should be made to accept type handles
 			default: none # None means undefined. Should be resolved from context, and if not possible should resolve to _DefaultSignalType
 			required: off
 		},
-		typeProperty Size {
-			name: "size"
-			types: [_IntType] 
-			default: 0 
-			required: off
-			public: on
-			meta: "Size of connected outer block"
-		},
-		typeProperty Rate {
-			name: "rate"
-			types: [_RealType]
-			default: 0
-			required: off
-			public: on
-			meta: "Rate of connected outer block"
-		}
 	]
 	inherits: [_Base]
 	meta: ""
@@ -122,7 +101,7 @@ type _Callable {
 	properties: [
 		typeProperty Ports {
 			name: "ports"
-			types: [ _MainOutputPort, _MainInputPort, _PropertyOutputPort, _PropertyInputPort ] 
+			allowedTypes: constrainedList { allowed: [_MainOutputPort, _MainInputPort, _PropertyOutputPort, _PropertyInputPort] } 
 			default: []
 			required: off
 		}

@@ -3,40 +3,38 @@ type _DomainDefinition {
 	properties: [
         typeProperty Substitutions {
 			name: "substitutions"
-			types: [""] # Allow list
+			allowedTypes: constrainedList { allowed: [_Any] }
 			default: []
 			required: off
 		},
 		typeProperty Framework {
 			name: "framework"
-			types: [_StringLiteral, ""]
-			default: none
+			allowedTypes: constrainedEntity { allowed: [_StringLiteral, _FrameworkDescriptionType, _NoneLiteral] }
 			required: on
 		},
 		typeProperty ParentDomain {
 			name: "parentDomain"
-			types: [""]
+			allowedTypes: constrainedEntity { allowed: [_StringLiteral, _DomainDefinition, _NoneLiteral] }
 			default: none
 			required: off
 			meta: "The domain's parent domain."
 		},
 		typeProperty MaxInstances {
 			name: "maxInstances"
-			types: [""]
+			allowedTypes: constrainedEntity { allowed: [_IntLiteral, _NoneLiteral] }
 			default: none
 			required: off
 			meta: "The maximum number of instances of this domain that can be created. Setting to none means no limit"
 		},
 		typeProperty DomainRate {
 			name: "rate"
-			types: [_RealLiteral, _IntLiteral, ""]
-			default: none
+			allowedTypes: constrainedEntity { allowed: [_RealLiteral, _IntLiteral, _NoneLiteral] }
 			required: on
 			meta: "The domain's rate. A value of none indicates an asynchronous or immediate domain."
 		},
 		typeProperty External {
 			name: "external"
-			types: [_Signal, _Switch]
+			allowedTypes: constrainedList { allowed: [_Signal, _Switch] }
 			default: []
 			required: off
 			meta: "Signals and switches in this domain that are owned outside the domain.
@@ -44,94 +42,94 @@ type _DomainDefinition {
 		},
 		typeProperty RequiresResources {
 			name: "requiresResources"
-			types: [""]
+			allowedTypes: constrainedList { allowed: [_ResourceType] }
 			default: []
 			required: off
 			meta: "A list of resources required by the domain"
 		},
 		typeProperty ProvidesResources {
 			name: "providesResources"
-			types: [_DomainResourceType]
+			allowedTypes: constrainedList { allowed: [_DomainResourceType] }
 			default: []
 			required: off
 			meta: "A list of resources provided by the domain"
 		},
 		typeProperty Inputs {
 			name: "inputs"
-			types: [constrainedList {anyOf: [_BlockType]}]
+			allowedTypes: constrainedList { allowed: [_Streamable, _Port, _Any] }
 			default: []
 			required: off
 		},
 		typeProperty Outputs {
 			name: "outputs"
-			types: [constrainedList {anyOf: [_BlockType]}]
+			allowedTypes: constrainedList { allowed: [_Streamable, _Port, _Any] }
 			default: []
 			required: off
 		},
 #		typeProperty GlobalsTag {
 #			name: "globalsTag"
-#			types: [_StringLiteral]
+#			allowedTypes: _StringLiteral
 #			default: "Includes"
 #			required: off
 #		},
 #		typeProperty DeclarationsTag {
 #			name: "declarationsTag"
-#			types: [_StringLiteral]
+#			allowedTypes: _StringLiteral
 #			default: ""
 #			required: off
 #		},
 #		typeProperty ProcessingTag {
 #			name: "processingTag"
-#			types: [_StringLiteral]
+#			allowedTypes: _StringLiteral
 #			default: ""
 #			required: off
 #		},
 #		typeProperty InitializationTag {
 #			name: "initializationTag"
-#			types: [_StringLiteral]
+#			allowedTypes: _StringLiteral
 #			default: ""
 #			required: off
 #		},
 #		typeProperty CleanupTag {
 #			name: "cleanupTag"
-#			types: [_StringLiteral]
+#			allowedTypes: _StringLiteral
 #			default: ""
 #			required: off
 #		},
 		typeProperty DomainIncludes {
 			name: "domainIncludes"
-			types: [""] # Should take a list
-			default: ""
+			allowedTypes: constrainedList { allowed: [_StringLiteral] }
+			default: []
 			required: off
 		},
 		typeProperty DomainDeclarations {
 			name: "domainDeclarations"
-			types: [""]
-			default: ""
+			allowedTypes: constrainedList { allowed: [_StringLiteral] }
+			default: []
 			required: off
 		},
 		typeProperty DomainDeclarationsCode {
 			name: "domainDeclarationsCode"
-			types: [_StringLiteral]
+			allowedTypes: _StringLiteral
 			default: ""
 			required: off
 		},
 
 		typeProperty DomainInstancesCode {
 			name: "domainInstancesCode"
-			types: [_StringLiteral]
+			allowedTypes: _StringLiteral
 			default: ""
 			required: off
 		},
 		typeProperty DomainInitializationCode {
 			name: "domainInitializationCode"
-			types: [_StringLiteral]
+			allowedTypes: _StringLiteral
 			default: ""
 			required: off
 		},
 		typeProperty DomainFunctionCode {
 			name: "domainFunctionCode"
-			types: [_StringLiteral]
+			allowedTypes: _StringLiteral
 			default: ""
 			required: off
 			meta: 'Declaration of the domain processing function. Use //[[Processing]]//[[/Processing]] to mark where the generated code needs to be placed within 
@@ -139,7 +137,7 @@ type _DomainDefinition {
 		},
 		typeProperty DomainProcessingCode {
 			name: "domainProcessingCode"
-			types: [_StringLiteral]
+			allowedTypes: _StringLiteral
 			default: ""
 			required: off
 			meta: 'Processing code for domain. Code to be called
@@ -147,17 +145,13 @@ type _DomainDefinition {
 		},
 		typeProperty DomainCleanupCode {
 			name: "domainCleanupCode"
-			types: [_StringLiteral]
+			allowedTypes: _StringLiteral
 			default: ""
 			required: off
 		},
 		typeProperty StateMachines {
 			name: "stateMachines"
-			types: [
-				constrainedList {
-					anyOf: [_StateType]
-				}
-			]
+			allowedTypes: constrainedList { allowed: [_StateType] }
 			default: []
 			required: off
 			meta: "State machines executed continuously within this domain."
@@ -168,11 +162,11 @@ type _DomainDefinition {
 
 module Exit {
     ports: [
-        mainInputPort MainInputPort { block: Input type: _SwitchType }
+        mainInputPort MainInputPort { block: Input }
 		# TODO add secondary port taking return value.
     ]
     blocks: [
-        switch Input {type: _SwitchType}
+        switch Input {}
     ]
     streams: [
         Input >> reaction { streams: [ 1 >> __ExitDomain(); ]}; #TODO set return value dynamically

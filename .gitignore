@@ -5,4 +5,13 @@ server/bin/
 *.log
 .DS_Store
 .vscode/settings.json
+.strdcache/
+**/.strdcache/
+strideroot/frameworks/
+strideroot/platforms/
+strideroot/systems/
+strideroot/plugins/
+strideroot/local/
+strideroot/testing/
+strideroot/tools/
 

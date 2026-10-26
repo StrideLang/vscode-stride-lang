@@ -43,14 +43,14 @@ module BandLimitedSaw {
         }
         trigger ResetPhase {}
         reaction CorrectPhase {
-            terminateWhen:  Done
+            terminateWhen:  CorrectPhase_Done
             onTermination:  ResetPhase;
 			blocks: [
-				trigger Done {}
+				trigger CorrectPhase_Done {}
 			]
             streams:    [
                 Phase - 2.0 >> PhaseResidue;
-                on >> Done;
+                on >> CorrectPhase_Done;
             ]
         }
         signal W {

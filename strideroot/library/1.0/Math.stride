@@ -2,280 +2,692 @@
 # Authors:
 # Andres Cabrera mantaraya36@gmail.com
 # Keehong Youn younkeehong@gmail.com
-
+#
 
 constant _Pi {
     value: 3.14159265358979323846264338327950288419716939937510
+    meta: "Mathematical constant Pi (ratio of a circle's circumference to its diameter)"
+}
+
+constant _TwoPi {
+    value: 6.28318530717958647692528676655900576839433879875021
+    meta: "Mathematical constant 2 * Pi (tau)"
+}
+
+constant _E {
+    value: 2.71828182845904523536028747135266249775724709369995
+    meta: "Euler's number (base of natural logarithm)"
 }
 
 module Abs {
 	ports: [
-		mainOutputPort OutputPort {
-			block: Output
-			meta : "Absolute value" 
-		},
 		mainInputPort InputPort {
 			block: Input
 			meta: "Input value"
+		},
+		mainOutputPort OutputPort {
+			block: Output
+			meta: "Absolute value" 
 		}
 	]
 	blocks: [
+		signal Input  {
+            rate: OutputPort.rate
+            type: OutputPort.type
+            domain: OutputPort.domain
+        }
+		signal Output {
+            rate: OutputPort.rate
+            type: OutputPort.type
+            domain: OutputPort.domain
+        }
 	]
 	streams: [
 		Input >> __Abs() >> Output;
 	]
-	meta: "Absolute function"
+	meta: "Returns the absolute value of the input signal."
 }
 
-module Cos {
-	ports: [ # A property could be the type of input, (degrees, radians, etc.)
-		mainOutputPort OutputPort {
-			block: Output
-			meta : "The cosine of the angle." 
-		},
+module Sign {
+	ports: [
 		mainInputPort InputPort {
 			block: Input
-			meta: "Input angle in radians"
+			meta: "Input value"
+		},
+		mainOutputPort OutputPort {
+			block: Output
+			meta: "Sign of the input (-1.0, 0.0, or 1.0)"
 		}
 	]
 	blocks: [
+		signal Input  {
+            rate: OutputPort.rate
+            type: OutputPort.type
+            domain: OutputPort.domain
+        }
+		signal Output {
+            rate: OutputPort.rate
+            type: OutputPort.type
+            domain: OutputPort.domain
+        }
+		switch IsPos  {
+            rate: OutputPort.rate
+            domain: OutputPort.domain
+        }
+		switch IsNeg  {
+            rate: OutputPort.rate
+            domain: OutputPort.domain
+        }
+		signal PosVal {
+            rate: OutputPort.rate
+            type: OutputPort.type
+            domain: OutputPort.domain
+        }
+	]
+	streams: [
+		[Input, 0.0] >> Greater() >> IsPos;
+		[Input, 0.0] >> Less()    >> IsNeg;
+		[IsPos, 1.0, 0.0] >> __Select() >> PosVal;
+		[IsNeg, -1.0, PosVal] >> __Select() >> Output;
+	]
+	meta: "Returns 1.0 if input > 0, -1.0 if input < 0, and 0.0 if input == 0."
+}
+
+module Cos {
+	ports: [
+		mainInputPort InputPort {
+			block: Input
+			meta: "Input angle in radians"
+		},
+		mainOutputPort OutputPort {
+			block: Output
+			meta: "Cosine of the input angle" 
+		}
+	]
+	blocks: [
+		signal Input  {
+            rate: OutputPort.rate
+            type: OutputPort.type
+            domain: OutputPort.domain
+        }
+		signal Output {
+            rate: OutputPort.rate
+            type: OutputPort.type
+            domain: OutputPort.domain
+        }
 	]
 	streams: [
 		Input >> __Cos() >> Output;
 	]
-	meta: "Cosine function"
+	meta: "Cosine function of angle in radians."
 }
 
-
-
 module Sin {
-	ports: [ # A property could be the type of input, (degrees, radians, etc.)
-		mainOutputPort OutputPort {
-			block: Output
-			meta : "The sine of the angle." 
-		},
+	ports: [
 		mainInputPort InputPort {
 			block: Input
 			meta: "Input angle in radians"
+		},
+		mainOutputPort OutputPort {
+			block: Output
+			meta: "Sine of the input angle" 
 		}
 	]
 	blocks: [	
+		signal Input  {
+            rate: OutputPort.rate
+            type: OutputPort.type
+            domain: OutputPort.domain
+        }
+		signal Output {
+            rate: OutputPort.rate
+            type: OutputPort.type
+            domain: OutputPort.domain
+        }
 	]
 	streams: [
 		Input >> __Sin() >> Output;
 	]
-	meta: "Sine function"
+	meta: "Sine function of angle in radians."
 }
 
-
 module Tan {
-	ports: [ # A property could be the type of input, (degrees, radians, etc.)
-		mainOutputPort OutputPort {
-			block: Output
-			meta : "The tangent of the angle." 
-		},
+	ports: [
 		mainInputPort InputPort {
 			block: Input
 			meta: "Input angle in radians"
+		},
+		mainOutputPort OutputPort {
+			block: Output
+			meta: "Tangent of the input angle" 
 		}
 	]
 	blocks: [
+		signal Input  {
+            rate: OutputPort.rate
+            type: OutputPort.type
+            domain: OutputPort.domain
+        }
+		signal Output {
+            rate: OutputPort.rate
+            type: OutputPort.type
+            domain: OutputPort.domain
+        }
 	]
 	streams: [
 		Input >> __Tan() >> Output;
 	]
-	meta: "Tangent function"
+	meta: "Tangent function of angle in radians."
 }
 
 module Divide {
 	ports: [
-		mainOutputPort OutputPort {
-			block: Output
-			meta : "The result of the division" 
-		},
 		mainInputPort InputPort {
 			block: Input
-			meta: "Input values" 
+			meta: "Two-element input list: [Numerator, Denominator]" 
+		},
+		mainOutputPort OutputPort {
+			block: Output
+			meta: "The quotient of the division" 
 		}
 	]
 	blocks: [
 		signal Input[2] { 
+			rate: OutputPort.rate
+			type: OutputPort.type
+			domain: OutputPort.domain
 			meta: "Input values"
 		},
-		signal Output {
-			meta : "The result of the division"
+		signal Output { 
+			rate: OutputPort.rate
+			type: OutputPort.type
+			domain: OutputPort.domain
+			meta: "Result of the division"
 		}
 	]
 	streams: [
-		Input[1]/Input[2] >> Output;
+		Input[0] / Input[1] >> Output;
 	]
-	meta: "Divide input values"
+	meta: "Divides Input[0] by Input[1]."
 }
 
 module Multiply {	
 	ports: [
-		mainOutputPort OutputPort {
-			block: Output
-			meta : "The result of the multiplication" 
-		},
 		mainInputPort InputPort {
 			block: Input
-			meta: "Values to multiply"
+			meta: "Two-element input list: [FactorA, FactorB]" 
+		},
+		mainOutputPort OutputPort {
+			block: Output
+			meta: "The product of the multiplication" 
 		}
 	]
 	blocks: [
 		signal Input[2] { 
-			meta: "Values to multiply"
+			rate: OutputPort.rate
+			type: OutputPort.type
+			domain: OutputPort.domain
 		},
-		signal Output {
-			meta : "The result of the multiplication" 
+		signal Output { 
+			rate: OutputPort.rate
+			type: OutputPort.type
+			domain: OutputPort.domain
 		}
 	]
 	streams: [
-		Input[1]*Input[2] >> Output;
+		Input[0] * Input[1] >> Output;
 	]
-	meta: "Multiply input values."
+	meta: "Multiplies Input[0] by Input[1]."
 }
 
 module Inverse {
-	input: Input
-	output: Output
+	ports: [
+		mainInputPort InputPort {
+			block: Input
+			meta: "Value to negate"
+		},
+		mainOutputPort OutputPort {
+			block: Output
+			meta: "The negated value"
+		}
+	]
 	blocks: [
-		signal Input { meta: "Value to invert" },
-		signal Output { meta: "The inverted value." }
+		signal Input  { 
+			rate: OutputPort.rate
+			type: OutputPort.type
+			domain: OutputPort.domain
+		},
+		signal Output { 
+			rate: OutputPort.rate
+			type: OutputPort.type
+			domain: OutputPort.domain
+		}
 	]
 	streams: [
 		-Input >> Output;
 	]
-	meta: "Invert (change the sign) of a value."
+	meta: "Inverts (changes the sign of) an input value: -Input."
 }
 
 module Pow {	
 	ports: [
-		mainOutputPort OutputPort {
-			block: Output
-		},
 		mainInputPort InputPort {
 			block: Input
-			domain: OutputPort.domain
-			meta: "Values to power: Input[1]^Input[2]"
+			meta: "Two-element input list: [Base, Exponent]"
+		},
+		mainOutputPort OutputPort {
+			block: Output
+			meta: "Result of Base raised to Exponent"
 		}
 	]
 	blocks: [
 		signal Input[2] { 
+			rate: OutputPort.rate
+			type: OutputPort.type
+			domain: OutputPort.domain
+		},
+		signal Output {
+			rate: OutputPort.rate
+			type: OutputPort.type
 			domain: OutputPort.domain
 		}
 	]
 	streams: [
-		[Input[1], Input[2]] >> __Pow() >> Output;
+		[Input[0], Input[1]] >> __Pow() >> Output;
 	]
-	meta: "power(Input[1], Input[2])"
+	meta: "Computes Base raised to the power of Exponent: pow(Input[0], Input[1])."
 }
 
 module Exp {	
 	ports: [
-		mainOutputPort OutputPort {
-			block: Output
-		},
 		mainInputPort InputPort {
 			block: Input
-			domain: OutputPort.domain
+			meta: "Exponent value"
+		},
+		mainOutputPort OutputPort {
+			block: Output
+			meta: "Result of e raised to Input"
 		}
 	]
 	blocks: [
+		signal Input  { 
+			rate: OutputPort.rate
+			type: OutputPort.type
+			domain: OutputPort.domain
+		},
+		signal Output { 
+			rate: OutputPort.rate
+			type: OutputPort.type
+			domain: OutputPort.domain
+		}
 	]
 	streams: [
 		Input >> __Exp() >> Output;
 	]
-	meta: "exp(Input)"
+	meta: "Computes the natural exponential: exp(Input)."
 }
 
 module Max {
 	ports: [
-		mainOutputPort OutputPort {
-			block: Output
-		},
 		mainInputPort InputPort {
 			block: Input
-			domain: OutputPort.domain
+			meta: "Two-element input list to compare: [A, B]"
+		},
+		mainOutputPort OutputPort {
+			block: Output
+			meta: "The maximum value"
 		}
 	]
 	blocks: [
 		signal Input[2] {
+			rate: OutputPort.rate
+			type: OutputPort.type
 			domain: OutputPort.domain
-			
+		},
+		signal Output {
+			rate: OutputPort.rate
+			type: OutputPort.type
+			domain: OutputPort.domain
+		},
+		switch Cond {
+			rate: OutputPort.rate
+			domain: OutputPort.domain
 		}
 	]
 	streams: [
-		[Input[1], Input[2]] >> Greater() >> Select(whenOn: Input[1] whenOff: Input[2]) >> Output;
+		[Input[0], Input[1]] >> Greater() >> Cond;
+		[Cond, Input[0], Input[1]] >> __Select() >> Output;
 	]
+	meta: "Returns the maximum of two input values in a list: [A, B] >> Max() >> Out."
 }
 
 module Min {
 	ports: [
-		mainOutputPort OutputPort {
-			block: Output
-		},
 		mainInputPort InputPort {
 			block: Input
-			domain: OutputPort.domain
+			meta: "Two-element input list to compare: [A, B]"
+		},
+		mainOutputPort OutputPort {
+			block: Output
+			meta: "The minimum value"
 		}
 	]
 	blocks: [
 		signal Input[2] {
+			rate: OutputPort.rate
+			type: OutputPort.type
 			domain: OutputPort.domain
-			
+		},
+		signal Output { 
+			rate: OutputPort.rate
+			type: OutputPort.type
+			domain: OutputPort.domain
+		},
+		switch Cond {
+			rate: OutputPort.rate
+			domain: OutputPort.domain
 		}
 	]
 	streams: [
-		[Input[1], Input[2]] >> Greater() >> Select(whenOn: Input[2] whenOff: Input[1]) >> Output;
+		[Input[0], Input[1]] >> Less() >> Cond;
+		[Cond, Input[0], Input[1]] >> __Select() >> Output;
 	]
+	meta: "Returns the minimum of two input values in a list: [A, B] >> Min() >> Out."
 }
 
 module Clamp {
 	ports: [
-		mainOutputPort OutputPort {
-			block: Output
-		},
 		mainInputPort InputPort {
 			block: Input
-			domain: OutputPort.domain
-		}
+			meta: "Input signal to constrain"
+		},
+		mainOutputPort OutputPort {
+			block: Output
+			meta: "Clamped output signal"
+		},
 		propertyInputPort MinValPort {
 			name: "min"
 			block: MinVal
-		}
+			meta: "Minimum lower bound"
+		},
 		propertyInputPort MaxValPort {
 			name: "max"
 			block: MaxVal
+			meta: "Maximum upper bound"
+		}
+	]
+	blocks: [
+		signal Input  { 
+			rate: OutputPort.rate
+			type: OutputPort.type
+			domain: OutputPort.domain
+		}
+		signal Output { 
+			rate: OutputPort.rate
+			type: OutputPort.type
+			domain: OutputPort.domain
+		}
+		signal MinVal { 
+			rate: OutputPort.rate
+			type: OutputPort.type
+			domain: OutputPort.domain
+			default: 0.0
+		}
+		signal MaxVal { 
+			rate: OutputPort.rate
+			type: OutputPort.type
+			domain: OutputPort.domain
+			default: 1.0
+		}
+		signal Temp   { 
+			rate: OutputPort.rate
+			type: OutputPort.type
+			domain: OutputPort.domain
 		}
 	]
 	streams: [
-		# One-liner would be:
-		# [[Input, MinVal] >> Max(), MaxVal] >> Min() >> Output;
-		[Input, MinVal] >> Max() >> T;
-		[T, MaxVal] >> Min() >> Output;
+		[Input, MinVal] >> Max() >> Temp;
+		[Temp, MaxVal]  >> Min() >> Output;
 	]
+	meta: "Constrains input signal between minimum and maximum bounds: Input >> Clamp(min: 0.0 max: 1.0) >> Output."
 }
 
 module Floor {	
 	ports: [
-		mainOutputPort OutputPort {
-			block: Output
-		},
 		mainInputPort InputPort {
 			block: Input
-			domain: OutputPort.domain
 			meta: "Floating point number input"
+		},
+		mainOutputPort OutputPort {
+			block: Output
+			meta: "Largest integer value less than or equal to input"
 		}
 	]
 	blocks: [
-		signal Input { 
+		signal Input  { 
+			rate: OutputPort.rate
+			type: OutputPort.type
+			domain: OutputPort.domain
+		},
+		signal Output { 
+			rate: OutputPort.rate
+			type: OutputPort.type
 			domain: OutputPort.domain
 		}
 	]
 	streams: [
 		Input >> __Floor() >> Output;
 	]
-	meta: "Returns float input value truncated to lower integer."
+	meta: "Returns input value rounded down to the nearest integer."
+}
+
+module Wrap {
+	ports: [
+		mainInputPort InputPort {
+			block: Input
+			meta: "Input signal to wrap"
+		},
+		mainOutputPort OutputPort {
+			block: Output
+			meta: "Wrapped output signal"
+		},
+		propertyInputPort MinValPort {
+			name: "min"
+			block: MinVal
+			meta: "Range lower bound"
+		},
+		propertyInputPort MaxValPort {
+			name: "max"
+			block: MaxVal
+			meta: "Range upper bound"
+		}
+	]
+	blocks: [
+		signal Input  { 
+			rate: OutputPort.rate
+			type: OutputPort.type
+			domain: OutputPort.domain
+		}
+		signal Output { 
+			rate: OutputPort.rate
+			type: OutputPort.type
+			domain: OutputPort.domain
+		}
+		signal MinVal { 
+			rate: OutputPort.rate
+			type: OutputPort.type
+			domain: OutputPort.domain
+			default: 0.0
+		}
+		signal MaxVal { 
+			rate: OutputPort.rate
+			type: OutputPort.type
+			domain: OutputPort.domain
+			default: 1.0
+		}
+		signal Range  { 
+			rate: OutputPort.rate
+			type: OutputPort.type
+			domain: OutputPort.domain
+		}
+		signal Offset { 
+			rate: OutputPort.rate
+			type: OutputPort.type
+			domain: OutputPort.domain
+		}
+		signal ModVal { 
+			rate: OutputPort.rate
+			type: OutputPort.type
+			domain: OutputPort.domain
+		}
+		signal Quo    { 
+			rate: OutputPort.rate
+			type: OutputPort.type
+			domain: OutputPort.domain
+		}
+		signal Fl     { 
+			rate: OutputPort.rate
+			type: OutputPort.type
+			domain: OutputPort.domain
+		}
+	]
+	streams: [
+		MaxVal - MinVal >> Range;
+		Input - MinVal >> Offset;
+		Offset / Range >> Quo;
+		Quo >> Floor() >> Fl;
+		Offset - (Range * Fl) >> ModVal;
+		ModVal + MinVal >> Output;
+	]
+	meta: "Periodically wraps input signal within [min, max): Input >> Wrap(min: 0.0 max: 1.0) >> Output."
+}
+
+module Lerp {
+	ports: [
+		mainInputPort InputPort {
+			block: Input
+			meta: "Base input signal"
+		},
+		mainOutputPort OutputPort {
+			block: Output
+			meta: "Interpolated output signal"
+		},
+		propertyInputPort TargetPort {
+			name: "target"
+			block: Target
+			meta: "Target signal to blend towards"
+		},
+		propertyInputPort FactorPort {
+			name: "factor"
+			block: Factor
+			meta: "Blend factor from 0.0 (Input) to 1.0 (Target)"
+		}
+	]
+	blocks: [
+		signal Input  { 
+			rate: OutputPort.rate
+			type: OutputPort.type
+			domain: OutputPort.domain
+		}
+		signal Output { 
+			rate: OutputPort.rate
+			type: OutputPort.type
+			domain: OutputPort.domain
+		}
+		signal Target { 
+			rate: OutputPort.rate
+			type: OutputPort.type
+			domain: OutputPort.domain
+			default: 0.0
+		}
+		signal Factor { 
+			rate: OutputPort.rate
+			type: OutputPort.type
+			domain: OutputPort.domain
+			default: 0.5
+		}
+	]
+	streams: [
+		Input + ((Target - Input) * Factor) >> Output;
+	]
+	meta: "Linearly interpolates from Input to Target based on factor: Input >> Lerp(target: Target factor: 0.5) >> Output."
+}
+
+module Map {
+	ports: [
+		mainInputPort InputPort {
+			block: Input
+			meta: "Input value to rescale"
+		},
+		mainOutputPort OutputPort {
+			block: Output
+			meta: "Rescaled output value"
+		},
+		propertyInputPort InMinPort {
+			name: "inMin"
+			block: InMin
+			meta: "Source range minimum"
+		},
+		propertyInputPort InMaxPort {
+			name: "inMax"
+			block: InMax
+			meta: "Source range maximum"
+		},
+		propertyInputPort OutMinPort {
+			name: "outMin"
+			block: OutMin
+			meta: "Target range minimum"
+		},
+		propertyInputPort OutMaxPort {
+			name: "outMax"
+			block: OutMax
+			meta: "Target range maximum"
+		}
+	]
+	blocks: [
+		signal Input  { 
+			rate: OutputPort.rate
+			type: OutputPort.type
+			domain: OutputPort.domain
+		}
+		signal Output { 
+			rate: OutputPort.rate
+			type: OutputPort.type
+			domain: OutputPort.domain
+		}
+		signal InMin  { 
+			rate: OutputPort.rate
+			type: OutputPort.type
+			domain: OutputPort.domain
+			default: 0.0
+		}
+		signal InMax  { 
+			rate: OutputPort.rate
+			type: OutputPort.type
+			domain: OutputPort.domain
+			default: 1.0
+		}
+		signal OutMin { 
+			rate: OutputPort.rate
+			type: OutputPort.type
+			domain: OutputPort.domain
+			default: 0.0
+		}
+		signal OutMax { 
+			rate: OutputPort.rate
+			type: OutputPort.type
+			domain: OutputPort.domain
+			default: 1.0
+		}
+		signal Norm   { 
+			rate: OutputPort.rate
+			type: OutputPort.type
+			domain: OutputPort.domain
+		}
+	]
+	streams: [
+		(Input - InMin) / (InMax - InMin) >> Norm;
+		OutMin + (Norm * (OutMax - OutMin)) >> Output;
+	]
+	meta: "Linearly maps Input from [inMin, inMax] to [outMin, outMax]: Input >> Map(inMin: 0.0 inMax: 1.0 outMin: 100.0 outMax: 1000.0) >> Output."
 }

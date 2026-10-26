@@ -1,14 +1,15 @@
-
 type _Alias {
 	typeName: "alias"
 	properties: [
-		typeProperty InputName {
-			name: "block"
-			types: [""]
+		typeProperty Entity {
+			name: "entity"
+			allowedTypes: _Any
 			default: none
 			required: off
+			meta: "What the alias stands for. Aliases of aliases are followed to any depth"
 		}
 	]
+	meta: "Another name for an entity, e.g. alias Int { entity: Int32 }"
 }
 
 type _Typed {
@@ -16,8 +17,8 @@ type _Typed {
 	properties: [
 		typeProperty TypeProperty {
 			name: "type"
-			types: [_StringLiteral, ""] # allow type block
-			default: none # Should be resolved from platform and conext if not explicitly defined
+			allowedTypes: [_NumericTypes, _MemberAccess, _NoneLiteral] # typeClass provided by the framework, or a port attribute (e.g. InputPort.type)
+			default: none # Resolved from stream connections, otherwise the first member of _NumericTypes
 			required: off
 		}
 	]
@@ -28,18 +29,18 @@ type _Streamable {
 	properties: [
 		typeProperty InputName {
 			name: "inputName"
-			types: [_StringLiteral, ""]
+			allowedTypes: _Any
 			default: none
 			required: off
 		},
 		typeProperty OutputName {
 			name: "outputName"
-			types: [_StringLiteral, ""]
+			allowedTypes: _Any
 			default: none
 			required: off
 		}
 	]
-	inherits: [_Rated]
+	inherits: []
 }
 
 type _Resetable {
@@ -47,7 +48,7 @@ type _Resetable {
 	properties: [
 		typeProperty Reset {
 			name: "reset"
-			types: [""]
+			allowedTypes: constrainedEntity { allowed: [_Any, _NoneLiteral] }
 			default: none
 			required: off
 		}
@@ -59,12 +60,13 @@ type _Rated {
 	properties: [
 		typeProperty Rate {
 			name: "rate"
-			types: [_IntLiteral, _RealLiteral, _PortProperty, _NoneLiteral]
+			allowedTypes: constrainedEntity { allowed: [_IntLiteral, _RealLiteral, _PortProperty, _NoneLiteral] }
 			default: none
 			required: off
 		}
 	]
-	inherits: [_Resetable]
+	inherits: []
+	meta: "Declarations without a rate are reactive: they take the rate of whatever writes to them"
 }
 
 type _DomainMember {
@@ -72,7 +74,7 @@ type _DomainMember {
 	properties: [
 		typeProperty Domain {
 			name: "domain"
-			types: ["", _StringLiteral, _DomainDefinition]
+			allowedTypes: constrainedEntity { allowed: [_StringLiteral, _DomainDefinition, _NoneLiteral] }
 			default: none
 			required: off
 		}
@@ -85,14 +87,13 @@ type _CodeGenerator {
 	properties: [
 		typeProperty {
 			name: "blocks"
-			types: [ constrainedList {anyOf: [_Streamable, _Reaction, _Module]} ]
+			allowedTypes: constrainedList { allowed: [_Streamable, _Reaction, _Module] }
 			default: []
 			required: off
 		},
 		typeProperty Streams {
 			name: "streams"
-			types: [ constrainedList {anyOf: [_StreamType]} ]
-			default: none
+			allowedTypes: constrainedList { allowed: [_StreamType] }
 			required: on
 		}
 	]
@@ -103,13 +104,13 @@ type _Base {
 	properties: [
 		typeProperty Inherits {
 			name: "inherits"
-			types: [_StringLiteral, ""]
+			allowedTypes: constrainedList { allowed: [_StringLiteral, _Base] }
 			default: [ _Base ]
 			required: off
 		},
 		typeProperty Meta {
 			name: "meta"
-			types: [_StringLiteral, _Constant]
+			allowedTypes: constrainedEntity { allowed: [_StringLiteral, _Constant] }
 			default: ""
 			required: off
 		}

@@ -7,13 +7,11 @@ module Oscillator {
         propertyInputPort FrequencyPort {
             name: "frequency"
             block: Frequency
-            default: 440.0
             meta: "The frequency of the oscillator."
         },
         propertyInputPort AmplitudeProperty {
             name: "amplitude"
             block: Amplitude
-            default: 1.0
             meta: "The amplitude of the oscillator."
         },
 #		property TypeProperty {
@@ -33,6 +31,9 @@ module Oscillator {
         }
     ]
     blocks: [
+        signal Frequency {
+            default :       440.0
+        }
         signal Amplitude {
             default :       1.0
         }
@@ -92,17 +93,21 @@ module Impulse {
         propertyInputPort FrequencyPort {
             name: "frequency"
             block: Frequency
-            default: 440.0
             meta: "The frequency of the oscillator."
         },
         propertyInputPort AmplitudePort {
             name: "amplitude"
             block: Amplitude
-            default: 1.0
             meta: "The amplitude of the oscillator."
         }
     ]
 	blocks: [
+        signal Frequency {
+            default :       440.0
+        }
+        signal Amplitude {
+            default :       1.0
+        }
 #        signal Type {
 #                default :       0.0
 #                rate:           AudioRate # FIXME needs to be streamRate

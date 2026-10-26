@@ -1,0 +1,75 @@
+# LogicTest.stride
+# Unit tests for strideroot/library/1.0/Logic.stride
+
+functionTest SelectTest {
+    target: Select
+    prepare: [
+        [ 1.0, 2.0, 3.0, 4.0 ] >> Input;
+        [ on,  off, on,  off ] >> Condition;
+        [ 9.0, 9.0, 9.0, 9.0 ] >> WhenOn;
+        [ 0.0, 0.0, 0.0, 0.0 ] >> WhenOff;
+    ]
+    validate: [
+        [ Output, [ 9.0, 0.0, 9.0, 0.0 ] ] >> ExpectEqual();
+    ]
+}
+
+functionTest AndTest {
+    target: And
+    prepare: [
+        [ [ on, on ], [ on, off ], [ off, on ], [ off, off ] ] >> Input;
+    ]
+    validate: [
+        [ Output, [ on, off, off, off ] ] >> ExpectEqual();
+    ]
+}
+
+functionTest OrTest {
+    target: Or
+    prepare: [
+        [ [ on, on ], [ on, off ], [ off, on ], [ off, off ] ] >> Input;
+    ]
+    validate: [
+        [ Output, [ on, on, on, off ] ] >> ExpectEqual();
+    ]
+}
+
+functionTest NotTest {
+    target: Not
+    prepare: [
+        [ on, off, on, off ] >> Input;
+    ]
+    validate: [
+        [ Output, [ off, on, off, on ] ] >> ExpectEqual();
+    ]
+}
+
+functionTest XorTest {
+    target: Xor
+    prepare: [
+        [ [ on, on ], [ on, off ], [ off, on ], [ off, off ] ] >> Input;
+    ]
+    validate: [
+        [ Output, [ off, on, on, off ] ] >> ExpectEqual();
+    ]
+}
+
+functionTest NandTest {
+    target: Nand
+    prepare: [
+        [ [ on, on ], [ on, off ], [ off, on ], [ off, off ] ] >> Input;
+    ]
+    validate: [
+        [ Output, [ off, on, on, on ] ] >> ExpectEqual();
+    ]
+}
+
+functionTest NorTest {
+    target: Nor
+    prepare: [
+        [ [ on, on ], [ on, off ], [ off, on ], [ off, off ] ] >> Input;
+    ]
+    validate: [
+        [ Output, [ off, off, off, on ] ] >> ExpectEqual();
+    ]
+}

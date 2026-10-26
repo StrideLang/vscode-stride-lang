@@ -1,0 +1,44 @@
+# ControlTest.stride
+# Unit tests for strideroot/library/1.0/Control.stride
+
+functionTest RisingEdgeTest {
+    target: RisingEdge
+    prepare: [
+        [ off, on, on, off, on ] >> Input;
+    ]
+    validate: [
+        [ Output, [ off, on, off, off, on ] ] >> ExpectEqual();
+    ]
+}
+
+functionTest FallingEdgeTest {
+    target: FallingEdge
+    prepare: [
+        [ off, on, on, off, on, off ] >> Input;
+    ]
+    validate: [
+        [ Output, [ off, off, off, on, off, on ] ] >> ExpectEqual();
+    ]
+}
+
+functionTest LatchTest {
+    target: Latch
+    prepare: [
+        [ 10.0, 20.0, 30.0, 40.0, 50.0 ] >> Input;
+        [ on,   off,  off,  on,   off  ] >> Trigger;
+    ]
+    validate: [
+        [ Output, [ 10.0, 10.0, 10.0, 40.0, 40.0 ] ] >> ExpectEqual();
+    ]
+}
+
+functionTest SmoothTest {
+    target: Smooth
+    prepare: [
+        [ 1.0, 1.0, 1.0, 1.0 ] >> Input;
+        [ 0.5, 0.5, 0.5, 0.5 ] >> Coeff;
+    ]
+    validate: [
+        [ Output, [ 0.5, 0.75, 0.875, 0.9375 ] ] >> ExpectNear(epsilon: 0.0001);
+    ]
+}

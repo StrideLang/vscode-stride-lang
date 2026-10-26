@@ -1,407 +1,263 @@
+# Comparisons.stride
+# Relational comparison operations for Stride
 
 module Greater {
     ports: [
-        mainOutputPort OutputPort {
-            name:       'output'
-            block: Output
-        },
         mainInputPort InputPort {
-            name:       'input'
             block: Input
-    		meta: "A list with the two values to be compared"
+            meta: "Two-element list with values to compare: [Left, Right]"
+        },
+        mainOutputPort OutputPort {
+            block: Output
+            meta: "Switch indicating if Left > Right"
         }
     ]
     blocks: [
-        signal Input[2] {domain: OutputPort.domain}
-		switch Output {domain: OutputPort.domain}
+        signal Input[2] {
+            rate: OutputPort.rate
+            type: InputPort.type
+            domain: OutputPort.domain
+        }
+        switch Output{
+            rate: OutputPort.rate
+            domain: OutputPort.domain
+        }
     ]
     streams: [
-       [Input[0], Input[1]] >> __Greater() >> Output;
+        [Input[0], Input[1]] >> __Greater() >> Output;
     ]
-    meta: "Compare two input values."
+    meta: "Compares two input values: outputs on if Input[0] > Input[1], else off."
 }
 
 module GreaterOrEqual {
     ports: [
-		mainOutputPort OutputPort {
-    			name:       'output'
-			block: Output
-		},
-		mainInputPort InputPort {
-    			name:       'input'
-			block: Input
-		}
+        mainInputPort InputPort {
+            block: Input
+            meta: "Two-element list with values to compare: [Left, Right]"
+        },
+        mainOutputPort OutputPort {
+            block: Output
+            meta: "Switch indicating if Left >= Right"
+        }
     ]
     blocks: [
-		signal Input[2] {domain: OutputPort.domain}
-		switch Output {domain: OutputPort.domain}
+        signal Input[2]{
+            rate: OutputPort.rate
+            type: InputPort.type
+            domain: OutputPort.domain
+        }
+        switch Output{
+            rate: OutputPort.rate
+            domain: OutputPort.domain
+        }
     ]
     streams: [
-       [Input[0], Input[1]] >> __GreaterOrEqual() >> Output;
+        [Input[0], Input[1]] >> __GreaterOrEqual() >> Output;
     ]
-    meta: ""
+    meta: "Compares two input values: outputs on if Input[0] >= Input[1], else off."
 }
 
 module Less {
-	ports: [
-		mainOutputPort OutputPort {
-    			name:       'output'
-			block: Output
-		},
-		mainInputPort InputPort {
-    			name:       'input'
-			block: Input
-		}
-	]
+    ports: [
+        mainInputPort InputPort {
+            block: Input
+            meta: "Two-element list with values to compare: [Left, Right]"
+        },
+        mainOutputPort OutputPort {
+            block: Output
+            meta: "Switch indicating if Left < Right"
+        }
+    ]
     blocks: [
-		signal Input[2] {domain: OutputPort.domain}
-		switch Output {domain: OutputPort.domain}
+        signal Input[2] {
+            rate: OutputPort.rate
+            type: InputPort.type
+            domain: OutputPort.domain
+        }
+        switch Output{
+            rate: OutputPort.rate
+            domain: OutputPort.domain
+        }
     ]
     streams: [
-       [Input[0], Input[1]] >> __Less() >> Output;
+        [Input[0], Input[1]] >> __Less() >> Output;
     ]
-    meta: ""
+    meta: "Compares two input values: outputs on if Input[0] < Input[1], else off."
 }
 
 module LessOrEqual {
-
-	ports: [
-		mainOutputPort OutputPort {
-    			name:       'output'
-			block: Output
-		},
-		mainInputPort InputPort {
-    			name:       'input'
-			block: Input
-		}
-	]
+    ports: [
+        mainInputPort InputPort {
+            block: Input
+            meta: "Two-element list with values to compare: [Left, Right]"
+        },
+        mainOutputPort OutputPort {
+            block: Output
+            meta: "Switch indicating if Left <= Right"
+        }
+    ]
     blocks: [
-		signal Input[2] {domain: OutputPort.domain}
-		switch Output {domain: OutputPort.domain}
+        signal Input[2] {
+            rate: OutputPort.rate
+            type: InputPort.type
+            domain: OutputPort.domain
+        }
+        switch Output{
+            rate: OutputPort.rate
+            domain: OutputPort.domain
+        }
     ]
     streams: [
-       [Input[0], Input[1]] >> __LessOrEqual() >> Output;
+        [Input[0], Input[1]] >> __LessOrEqual() >> Output;
     ]
-    meta: ""
+    meta: "Compares two input values: outputs on if Input[0] <= Input[1], else off."
 }
 
 module Equal {
-	ports: [
-		mainOutputPort OutputPort {
-    		name:       'output'
-			block: Output
-		},
-		mainInputPort InputPort {
-    		name:       'input'
-			block: Input
-		}
-	]
+    ports: [
+        mainInputPort InputPort {
+            block: Input
+            meta: "Two-element list with values to compare: [Left, Right]"
+        },
+        mainOutputPort OutputPort {
+            block: Output
+            meta: "Switch indicating if Left == Right"
+        }
+    ]
     blocks: [
-        signal Input[2] { domain: OutputPort.domain},
-        switch Output { domain: OutputPort.domain}
+        signal Input[2] {
+            rate: OutputPort.rate
+            type: InputPort.type
+            domain: OutputPort.domain
+        }
+        switch Output{
+            rate: OutputPort.rate
+            domain: OutputPort.domain
+        }
     ]
     streams: [
-       [Input[0], Input[1]] >> __Equal() >> Output;
+        [Input[0], Input[1]] >> __Equal() >> Output;
     ]
-    meta: ""
+    meta: "Compares two input values: outputs on if Input[0] == Input[1], else off."
 }
 
 module NotEqual {
-
-	ports: [
-		mainOutputPort OutputPort {
-    			name:       'output'
-			block: Output
-		},
-		mainInputPort InputPort {
-    			name:       'input'
-			block: Input
-		}
-	]
-    blocks: [
-        signal Input[2] { domain: OutputPort.domain},
-        switch Output { domain: OutputPort.domain}
-    ]
-    streams: [
-       [Input[0], Input[1]] >> __NotEqual() >> Output;
-    ]
-    meta: ""
-}
-
-module Select {
-
-	ports: [
-		mainOutputPort OutputPort {
-			name:       'output'
-			block: Output
-		},
-		mainInputPort InputPort {
-			name:       'input'
-			block: Input
-		},
-		propertyInputPort WhenOnProperty {
-			name: "whenOn"
-			block: WhenOn
-			meta: ""
-        },
-		propertyInputPort WhenOffProperty {
-			name: "whenOff"
-			block: WhenOff
-			meta: ""
-        }
-    ]
-    blocks: [
-		switch Input {
-			domain: OutputPort.domain
-		}
-    ]
-    streams: [
-        [Input, WhenOn, WhenOff]  >> __Select() >> Output;
-    ]
-    meta: ""
-}
-
-module Choose {
-
-	ports: [
-		mainOutputPort OutputPort {
-    			name:       'output'
-			block: Output
-		},
-		mainInputPort InputPort {
-    			name:       'input'
-			block: Input
-		}
-		propertyInputPort ConditionPort {
-			name: "condition"
-			block: Condition
-			meta: ""
-        }
-    ]
-    blocks: [
-		signal Input[2] {domain: OutputPort.domain}
-        _chooseType ChooseBlock {}
-    ]
-    streams: [
-        [Condition, Input[0], Input[1]]  >> __Choose() >> Output;
-    ]
-    meta: ""
-}
-
-module OnChange {
-
-	ports: [
-		mainOutputPort OutputPort {
-    			name:       'output'
-			block: Output
-		},
-		mainInputPort InputPort {
-    			name:       'input'
-			block: Input
-		}
-	]
-    blocks: [
-        switch Input {
-                default :       off
-        },
-        switch Output {
-                default :       off
-        },
-		switch OldInput {},
-		reaction OnChangedReaction {
-			output: Output
-			ports: [
-            port OutputPort {
-            name:       'output'
-            main: on
-            block: Output
-            direction:  'output'
-        },
-				port OutputProperty {
-					name: "output"
-					block: OutputValue
-#					type: [""] # Any type for now
-				}
-			]
-#			onExecution:
-#			terminateWhen:
-			blocks: [
-				switch Output { }
-				switch OutputValue {}
-			]
-			streams: [
-				OutputValue >> Output;
-			]
-		}
-    ]
-    streams: [
-#        Input != OldInput  >> OnChangedReaction(output: Input) >> Output;
-		Input >> OldInput;
-    ]
-    meta: "Discard repetitions of a value. Can be use to turn synchronous signals to asynchronous messages."
-}
-
-module Compare {
-    input: Input
-    output: Output
     ports: [
-    port OutputPort {
-        name:       'output'
-        main: on
-        block: Output
-        direction:  'output'
-    },
-    port InputPort {
-        name:       'input'
-        main: on
-        size: 2
-        direction:  'input'
-    },
-    port OperatorProperty {
-			name: "operator"
-			block: Operator
-#			type: [""] # Any type for now
-		},
-		port ValueProperty {
-			name: "value"
-			block: Value
-#			type: [""] # Any type for now
-		}
-	]
-    blocks: [
-        switch Output {},
-		signal Operator {},
-		signal Value {}
-    ]
-    streams: [
-
-    ]
-    meta: "Not implemented..."
-}
-
-module And {
-    ports: [
-        mainOutputPort OutputPort {
-            name:       'output'
-            block: Output
-        },
         mainInputPort InputPort {
-            name:       'input'
             block: Input
-        }
-    ]
-    blocks: [
-        switch Input[2] {domain: OutputPort.domain},
-        switch Output {domain: OutputPort.domain}
-    ]
-    streams: [
-       [Input[0], Input[1]] >> __And() >> Output;
-    ]
-    meta: "Logical AND operation"
-}
-
-module Or {
-    ports: [
-        mainOutputPort OutputPort {
-            name:       'output'
-            block: Output
+            meta: "Two-element list with values to compare: [Left, Right]"
         },
-        mainInputPort InputPort {
-            name:       'input'
-            block: Input
-        }
-    ]
-    blocks: [
-        switch Input[2] {domain: OutputPort.domain},
-        switch Output {domain: OutputPort.domain}
-    ]
-    streams: [
-       [Input[0], Input[1]] >> __Or() >> Output;
-    ]
-    meta: "Logical OR operation"
-}
-
-module Not {
-    ports: [
         mainOutputPort OutputPort {
-            name:       'output'
             block: Output
-        },
-        mainInputPort InputPort {
-            name:       'input'
-            block: Input
+            meta: "Switch indicating if Left != Right"
         }
     ]
     blocks: [
-        switch Input {domain: OutputPort.domain},
-        switch Output {domain: OutputPort.domain}
+        signal Input[2] {
+            rate: OutputPort.rate
+            type: InputPort.type
+            domain: OutputPort.domain
+        }
+        switch Output{
+            rate: OutputPort.rate
+            domain: OutputPort.domain
+        }
     ]
     streams: [
-       Input >> __Not() >> Output;
+        [Input[0], Input[1]] >> __NotEqual() >> Output;
     ]
-    meta: "Logical NOT operation"
+    meta: "Compares two input values: outputs on if Input[0] != Input[1], else off."
 }
 
-module Xor {
+loop AllOn {
     ports: [
-        mainOutputPort OutputPort {
-            name:       'output'
-            block: Output
-        },
         mainInputPort InputPort {
-            name:       'input'
-            block: Input
+            block: AllOn_Input
+            meta: "Array of switches to be checked"
+        },
+        mainOutputPort OutputPort {
+            block: AllOn_Output
+            meta: "Switch that is on only if all input switches are on"
         }
     ]
     blocks: [
-        switch Input[2] {domain: OutputPort.domain},
-        switch Output {domain: OutputPort.domain}
+        switch AllOn_Input[InputPort.size] {
+            rate: OutputPort.rate
+            domain: OutputPort.domain
+        },
+        switch AllOn_Output {
+            default: on
+            rate: OutputPort.rate
+            domain: OutputPort.domain
+            reset: AllOn_Reset
+        },
+        signal AllOn_Index {
+            default: 0
+            rate: none
+            type: Int
+            domain: OutputPort.domain
+            reset: AllOn_Reset
+        },
+        switch AllOn_Done {
+            domain: OutputPort.domain
+        },
+        trigger AllOn_Reset {}
     ]
+    onExecution: AllOn_Reset
+    terminateWhen: AllOn_Done
     streams: [
-       [Input[0], Input[1]] >> __Xor() >> Output;
+        [AllOn_Output, AllOn_Input[AllOn_Index]] >> And() >> AllOn_Output;
+        AllOn_Index + 1 >> AllOn_Index;
+        [AllOn_Index, InputPort.size] >> Equal() >> AllOn_Done;
     ]
-    meta: "Logical XOR operation"
+    meta: "Outputs on if all switches in the input array are on: Input >> AllOn() >> Output."
 }
 
-module Nand {
+loop AllOff {
     ports: [
-        mainOutputPort OutputPort {
-            name:       'output'
-            block: Output
-        },
         mainInputPort InputPort {
-            name:       'input'
-            block: Input
+            block: AllOff_Input
+            meta: "Array of switches to be checked"
+        },
+        mainOutputPort OutputPort {
+            block: AllOff_Output
+            meta: "Switch that is on only if all input switches are off"
         }
     ]
     blocks: [
-        switch Input[2] {domain: OutputPort.domain},
-        switch Output {domain: OutputPort.domain}
-    ]
-    streams: [
-       [Input[0], Input[1]] >> __Nand() >> Output;
-    ]
-    meta: "Logical NAND operation"
-}
-
-module Nor {
-    ports: [
-        mainOutputPort OutputPort {
-            name:       'output'
-            block: Output
+        switch AllOff_Input[InputPort.size] {
+            rate: OutputPort.rate
+            domain: OutputPort.domain
         },
-        mainInputPort InputPort {
-            name:       'input'
-            block: Input
-        }
+        switch AllOff_Output {
+            default: on
+            rate: OutputPort.rate
+            domain: OutputPort.domain
+            reset: AllOff_Reset
+        },
+        switch AllOff_InputOff {
+            rate: OutputPort.rate
+            domain: OutputPort.domain
+        },
+        signal AllOff_Index {
+            default: 0
+            rate: none
+            type: Int
+            domain: OutputPort.domain
+            reset: AllOff_Reset
+        },
+        switch AllOff_Done {
+            domain: OutputPort.domain
+        },
+        trigger AllOff_Reset {}
     ]
-    blocks: [
-        switch Input[2] {domain: OutputPort.domain},
-        switch Output {domain: OutputPort.domain}
-    ]
+    onExecution: AllOff_Reset
+    terminateWhen: AllOff_Done
     streams: [
-       [Input[0], Input[1]] >> __Nor() >> Output;
+        AllOff_Input[AllOff_Index] >> Not() >> AllOff_InputOff;
+        [AllOff_Output, AllOff_InputOff] >> And() >> AllOff_Output;
+        AllOff_Index + 1 >> AllOff_Index;
+        [AllOff_Index, InputPort.size] >> Equal() >> AllOff_Done;
     ]
-    meta: "Logical NOR operation"
+    meta: "Outputs on if all switches in the input array are off: Input >> AllOff() >> Output."
 }
-

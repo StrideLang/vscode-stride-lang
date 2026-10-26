@@ -1,225 +1,9 @@
-type _Constraint {
-	# Constraints get a special treatment in validation.
-	# This type serves to mark declarations as constraints for special treatment
-    typeName: "_constraint"
-    properties: [
-		typeProperty {
-			name: "constraint"
-			types: [""]
-			default: none
-			required: off
-		}
-	]
-    inherits: [_Base]
-}
-
-type _ConstrainedInt {
-    typeName: "constrainedInt"
-    properties: [
-		typeProperty {
-			name: "multipleOf"
-			types: [_IntLiteral, _NoneLiteral]
-			default: none
-			required: off
-		}		
-		typeProperty {
-			name: "maximum"
-			types: [_IntLiteral, _NoneLiteral]
-			default: none
-			required: off
-		}		
-		typeProperty {
-			name: "exclusiveMaximum"
-			types: [_IntLiteral, _NoneLiteral]
-			default: none
-			required: off
-		}		
-		typeProperty {
-			name: "minimum"
-			types: [_IntLiteral, _NoneLiteral]
-			default: none
-			required: off
-		}	
-		typeProperty {
-			name: "exclusiveMinimum"
-			types: [_IntLiteral, _NoneLiteral]
-			default: none
-			required: off
-		}
-    ]
-	inherits: [_Constraint]
-}
-
-type _ConstrainedString {
-    typeName: "constrainedString"
-    properties: [	
-		typeProperty {
-			name: "maxLength"
-			types: [_IntLiteral, _NoneLiteral]
-			default: none
-			required: off
-		}		
-		typeProperty {
-			name: "minLength"
-			types: [_IntLiteral, _NoneLiteral]
-			default: none
-			required: off
-		}
-    ]
-	inherits: [_Constraint]
-}
-
-type _ConstrainedReal {
-    typeName: "constrainedReal"
-    properties: [
-		typeProperty {
-			name: "maximum"
-			types: [_IntLiteral, _RealLiteral, _NoneLiteral]
-			default: none
-			required: off
-		}		
-		typeProperty {
-			name: "exclusiveMaximum"
-			types: [_IntLiteral, _RealLiteral, _NoneLiteral]
-			default: none
-			required: off
-		}		
-		typeProperty {
-			name: "minimum"
-			types: [_IntLiteral, _RealLiteral, _NoneLiteral]
-			default: none
-			required: off
-		}	
-		typeProperty {
-			name: "exclusiveMinimum"
-			types: [_IntLiteral, _RealLiteral, _NoneLiteral]
-			default: none
-			required: off
-		}
-    ]
-    inherits: [_Base]
-}
-
-type _ConstrainedList {
-    typeName: "constrainedList"
-    properties: [
-		typeProperty {
-			name: "maxItems"
-			types: [_IntLiteral,  _NoneLiteral]
-			default: none
-			required: off
-		}		
-		typeProperty {
-			name: "minItems"
-			types: [_IntLiteral,  _NoneLiteral]
-			default: none
-			required: off
-		}
-		typeProperty {
-			name: "uniqueItems"
-			types: [_SwitchLiteral]
-			default: off
-			required: off
-		}	
-		typeProperty {
-			name: "allowed"
-			types: [_Block, _NoneLiteral]
-			default: []
-			required: off
-		}	
-    ]
-    inherits: [_Base]
-}
-
-
-type _TypeProperty {
-	typeName: "typeProperty"
-	properties: [
-		typeProperty Name {
-			name: "name"
-			types: [_StringLiteral, ""]
-			default: none
-			required: on
-		},
-		typeProperty Direction {
-			name: "direction"
-			types: [_StringLiteral]
-			default: "output"
-			required: off
-		},
-		typeProperty Types {
-			name: "types"
-			types: [_StringLiteral, _ConstrainedInt, _ConstrainedReal,  _ConstrainedString, ""]
-			default: none
-			required: on
-		},
-		typeProperty Default {
-			name: "default"
-			types: [""] # TODO how to handle hybrid port types?
-			default: none
-			required: on
-		},
-		typeProperty Required {
-			name: "required"
-			types: [_SwitchLiteral]
-			default: none
-			required: on
-		},
-		typeProperty Public { # TODO enforce
-			name: "public"
-			types: [_SwitchLiteral]
-			default: on
-			required: off
-		},
-		typeProperty Writeable {
-			name: "writeable"
-			types: [_SwitchLiteral]
-			default: on
-			required: off
-			meta: "Defines whether type is publicly writeable." # TODO enforce
-		}
-	]
-	inherits: [_Base]
-}
-
-type _Type {
-	typeName: "type"
-	properties: [
-		typeProperty TypeName {
-			name: "typeName"
-			types: [_StringLiteral]
-			default: none
-			required: on
-		},
-		typeProperty Properties {
-			name: "properties"
-			types: [""] 
-			default: none
-			required: on
-		}
-		typeProperty Inherits {
-			name: "inherits"
-			types: [""]
-			default: [_Base]
-			required: off
-		},
-		typeProperty Meta {
-			name: "meta"
-			types: [_StringLiteral]
-			default: ""
-			required: off
-		}
-	]
-	inherits: []
-	meta: "type cannot inherit from '_Base' to avoid circular dependencies"
-}
-
 type _Constant {
 	typeName: "constant"
 	properties: [
 		typeProperty Value {
 			name: "value"
-			types: [_StringLiteral, _IntLiteral, _RealLiteral, _SwitchLiteral, _Constant, _ResourceType, _NoneLiteral]
+			allowedTypes: constrainedEntity { allowed: [_StringLiteral, _IntLiteral, _RealLiteral, _SwitchLiteral, _Constant, _ResourceType, _NoneLiteral] }
 			default: none
 			required: off
 #			meta: "The constant value"
@@ -234,12 +18,12 @@ type _Switch {
 	properties: [
 		typeProperty Default {
 			name: "default"
-			types: [_SwitchLiteral]
+			allowedTypes: _SwitchLiteral
 			default: off
 			required: off
 		}
 	]
-	inherits: [_Streamable, _DomainMember]
+	inherits: [_Streamable, _Rated, _DomainMember, _Resetable]
 }
 
 type _Trigger {
@@ -254,18 +38,18 @@ type _Signal {
 	properties: [
 		typeProperty Value {
 			name: "value"
-			types: [_IntLiteral, _RealLiteral]
+			allowedTypes: constrainedEntity { allowed: [_IntLiteral, _RealLiteral] }
 			default: 0.0
 			required: off
 		},
 		typeProperty Default {
 			name: "default"
-			types: [_IntLiteral, _RealLiteral, ""]
+			allowedTypes: constrainedEntity { allowed: [_IntLiteral, _RealLiteral] }
 			default: 0.0
 			required: off
 		}
 	]
-	inherits: [_Streamable, _Typed, _DomainMember, _Resetable]
+	inherits: [_Streamable, _Rated, _Typed, _DomainMember, _Resetable]
 }
 
 type _Buffer {
@@ -273,31 +57,30 @@ type _Buffer {
 	properties: [
 		typeProperty TypePort {
 			name: "type"
-			types: [_StringLiteral, ""]
+			allowedTypes: constrainedEntity { allowed: [_StringLiteral, _NoneLiteral] }
 			default: none
 			required: off
 		},
 		typeProperty SizePort {
 			name: "size"
-			types: [_IntLiteral, ""]
-			default: 0
+			allowedTypes: _IntLiteral
 			required: on
 		},
 		typeProperty RatePort {
 			name: "rate"
-			types: [""]
+			allowedTypes: constrainedEntity { allowed: [_IntLiteral, _NoneLiteral] }
 			default: none
 			required: off
 		},
 		typeProperty DefaultPort {
 			name: "default"
-			types: [""]
+			allowedTypes: constrainedEntity { allowed: [_IntLiteral, _RealLiteral, _NoneLiteral] }
 			default: none
 			required: off
 		},
 		typeProperty _InternalType {
 			name: "_internalType"
-			types: [""]
+			allowedTypes: _Any
 			default: _RingBufferType
 			required: off
 		}
@@ -311,25 +94,24 @@ type _Table {
 	properties: [
 		typeProperty SizePort {
 			name: "size"
-			types: [_IntLiteral]
-			default: 512
+			allowedTypes: _IntLiteral
 			required: on
 		},
 		typeProperty RatePort {
 			name: "rate"
-			types: [_IntLiteral]
+			allowedTypes: constrainedEntity { allowed: [_IntLiteral, _NoneLiteral] }
 			default: none
 			required: off
 		},
 		typeProperty TypePort {
 			name: "type"
-			types: [_StringLiteral, ""]
+			allowedTypes: constrainedEntity { allowed: [_StringLiteral, _NoneLiteral] }
 			default: none
 			required: off
 		},
 		typeProperty _InternalType {
 			name: "_internalType"
-			types: [""]
+			allowedTypes: _Any
 			default: _TableType
 			required: off
 		}
@@ -337,34 +119,34 @@ type _Table {
 	inherits: [_DomainMember, _Resetable]
 }
 
-type _StringType {
+type _String {
 	typeName: "string"
 	properties: [
 		typeProperty Default {
 			name: "default"
-			types: [_StringLiteral, ""]
+			allowedTypes: _StringLiteral
 			default: ""
 			required: off
 			meta: "Initial and default value"
 		}
 		typeProperty MaxSize {
 			name: "maxSize"
-			types: [""]
+			allowedTypes: constrainedEntity { allowed: [_IntLiteral, _NoneLiteral] }
 			default: none
 			required: off
 			meta: "Maximum size of the string"
 		}
 		typeProperty PreAllocate {
 			name: "preallocate"
-			types: [_IntLiteral]
+			allowedTypes: _IntLiteral
 			default: 0
 			required: off
 			meta: "Preallocate to size"
 		}
 	]
-	meta: "Strings with variable length."
+	meta: "Strings with variable length. Not rated, so reactive."
 
-	inherits: [_DomainMember, _Resetable]
+	inherits: [_Streamable, _DomainMember, _Resetable]
 }
 
 type _StreamType {
@@ -372,7 +154,7 @@ type _StreamType {
 	properties: [
 #		typeProperty Value {
 #			name: "value"
-#			types: [""]
+#			allowedTypes: _Any
 #			default: none
 #			required: off
 #		}
@@ -384,48 +166,47 @@ type _IteratorType {
 	properties: [
 		typeProperty Default {
 			name: "default"
-			types: [_IntLiteral, ""]
+			allowedTypes: _IntLiteral
 			default: 0
 			required: off
 			meta: "Starting value for iterator"
 		},
 		typeProperty Increment {
 			name: "increment"
-			types: [_IntLiteral]
+			allowedTypes: _IntLiteral
 			default: 1
 			required: off
 		},
 		typeProperty Limit {
 			name: "limit"
-			types: [_IntLiteral, ""]
-			default: none
+			allowedTypes: _IntLiteral
 			required: on
 			meta: "stop before reaching this value"
 		},
 		typeProperty Rate {
 			name: "rate"
-			types: [_IntLiteral]
+			allowedTypes: constrainedEntity { allowed: [_IntLiteral, _NoneLiteral] }
 			default: none
 			required: off
 			meta: "Not supported yet, but could be of use in the future"
 		},
 		typeProperty Domain {
 			name: "domain"
-			types: [""]
+			allowedTypes: constrainedEntity { allowed: [_Domain, _NoneLiteral] }
 			default: none
 			required: off
 			meta: "Not supported yet, but could be of use in the future"
 		},
 		typeProperty Reset {
 			name: "reset"
-			types: [""]
+			allowedTypes: constrainedEntity { allowed: [_Trigger, _Signal, _Switch, _NoneLiteral] }
 			default: none
 			required: off
 			meta: "This trigger will reset this iterator when triggered"
 		}
 		typeProperty Done {
 			name: "done"
-			types: [""]
+			allowedTypes: constrainedEntity { allowed: [_Trigger, _Signal, _Switch, _NoneLiteral] }
 			default: none
 			required: off
 			meta: "This trigger will be triggered when the iterator finishes a whole run"
@@ -439,12 +220,10 @@ type _GroupType {
 	properties: [
 		typeProperty Members {
 			name: "members"
-			types: [""]
-			default: none
+			allowedTypes: constrainedList { allowed: [_Streamable] }
 			required: on
 			meta: "Members of the group"
 		}
 	]
 	meta: "Groups signals for block processing. Guarantees that all signals are processed together."
 }
-

@@ -44,7 +44,7 @@ In Stride domains, execution occurs in discrete ticks (samples). Within each dom
      3. `onTransition` action streams execute.
      4. The active state ID is updated to the target state (resolving leaf initial or restored history states).
      5. The transition request queue is cleared.
-     6. `onEntry` streams execute top-down for the target state hierarchy.
+     6. `updateGuard` and `onEntry` streams execute top-down for the target state hierarchy synchronously within this same transition tick.
      7. The tick completes.
 
 3. **Steady-State Processing Tick (No Transition Firing):**
@@ -53,7 +53,9 @@ In Stride domains, execution occurs in discrete ticks (samples). Within each dom
    - If the active state has `isParallel: on`, `onProcess` streams of all its active parallel child regions execute concurrently in the same tick.
 
 > [!NOTE]
-> **Separation of Transition and Processing:** `onProcess` streams of a newly entered state begin on the tick *after* the transition fires. This guarantees clear separation between state lifecycle mutations (`onExit`, `onTransition`, `onEntry`) and continuous signal processing (`onProcess`), preventing duplicate or partial sample calculations within a single time slice.
+> **Execution Timing (`onEntry` vs `onProcess`):**
+> - **Same Tick (`onEntry` & `updateGuard`):** `onEntry` and `updateGuard` execute immediately in the **same tick** that the state change occurs. This establishes target state invariants and initializes guard signals instantaneously so external readers or next-step transitions observe a consistent state.
+> - **Next Tick (`onProcess`):** Continuous signal processing via `onProcess` begins on the tick *after* the transition completes. This prevents duplicate or partial sample calculations within a single time slice.
 
 ---
 
@@ -119,17 +121,17 @@ stateDiagram-v2
 
 ```stride
 # Shared hardware signals used by transitions
-signal PowerButtonHold { domain: RootDomain type: _IntType }
-signal BluetoothConnected { domain: RootDomain type: _IntType }
-signal BluetoothDisconnected { domain: RootDomain type: _IntType }
-signal CallIncoming { domain: RootDomain type: _IntType }
-signal CallEnded { domain: RootDomain type: _IntType }
-signal MediaPlay { domain: RootDomain type: _IntType }
-signal MediaPause { domain: RootDomain type: _IntType }
-signal PairingButtonPress { domain: RootDomain type: _IntType }
-signal IsRadioReady { domain: RootDomain type: _IntType }
-signal IsRadioOff { domain: RootDomain type: _IntType }
-signal IsPairingTimeout { domain: RootDomain type: _IntType }
+signal PowerButtonHold { domain: RootDomain type: Int }
+signal BluetoothConnected { domain: RootDomain type: Int }
+signal BluetoothDisconnected { domain: RootDomain type: Int }
+signal CallIncoming { domain: RootDomain type: Int }
+signal CallEnded { domain: RootDomain type: Int }
+signal MediaPlay { domain: RootDomain type: Int }
+signal MediaPause { domain: RootDomain type: Int }
+signal PairingButtonPress { domain: RootDomain type: Int }
+signal IsRadioReady { domain: RootDomain type: Int }
+signal IsRadioOff { domain: RootDomain type: Int }
+signal IsPairingTimeout { domain: RootDomain type: Int }
 
 state BluetoothHeadset {
     states: [Off, PoweringOn, Active, PoweringOff]

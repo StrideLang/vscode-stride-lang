@@ -1,0 +1,132 @@
+# MathTest.stride
+# Unit tests for strideroot/library/1.0/Math.stride
+
+functionTest AbsTest {
+    target: Abs
+    prepare: [
+        [ -5.0, 3.2, 0.0, -100.25, 42.0 ] >> Input;
+    ]
+    validate: [
+        [ Output, [ 5.0, 3.2, 0.0, 100.25, 42.0 ] ] >> ExpectNear(epsilon: 0.0001);
+    ]
+}
+
+functionTest SignTest {
+    target: Sign
+    prepare: [
+        [ -10.5, 0.0, 42.0, -0.001, 100.0 ] >> Input;
+    ]
+    validate: [
+        [ Output, [ -1.0, 0.0, 1.0, -1.0, 1.0 ] ] >> ExpectEqual();
+    ]
+}
+
+functionTest MultiplyTest {
+    target: Multiply
+    prepare: [
+        [ [ 2.0, 3.0 ], [ -4.0, 5.0 ], [ 0.0, 10.0 ], [ 2.5, 4.0 ] ] >> Input;
+    ]
+    validate: [
+        [ Output, [ 6.0, -20.0, 0.0, 10.0 ] ] >> ExpectNear(epsilon: 0.0001);
+    ]
+}
+
+functionTest DivideTest {
+    target: Divide
+    prepare: [
+        [ [ 6.0, 2.0 ], [ 10.0, 4.0 ], [ -15.0, 3.0 ], [ 1.0, 2.0 ] ] >> Input;
+    ]
+    validate: [
+        [ Output, [ 3.0, 2.5, -5.0, 0.5 ] ] >> ExpectNear(epsilon: 0.0001);
+    ]
+}
+
+functionTest InverseTest {
+    target: Inverse
+    prepare: [
+        [ 5.0, -10.0, 0.0, 3.14 ] >> Input;
+    ]
+    validate: [
+        [ Output, [ -5.0, 10.0, 0.0, -3.14 ] ] >> ExpectNear(epsilon: 0.0001);
+    ]
+}
+
+functionTest MaxTest {
+    target: Max
+    prepare: [
+        [ [ 1.0, 5.0 ], [ 10.0, -2.0 ], [ 3.0, 3.0 ], [ -8.0, -3.0 ] ] >> Input;
+    ]
+    validate: [
+        [ Output, [ 5.0, 10.0, 3.0, -3.0 ] ] >> ExpectEqual();
+    ]
+}
+
+functionTest MinTest {
+    target: Min
+    prepare: [
+        [ [ 1.0, 5.0 ], [ 10.0, -2.0 ], [ 3.0, 3.0 ], [ -8.0, -3.0 ] ] >> Input;
+    ]
+    validate: [
+        [ Output, [ 1.0, -2.0, 3.0, -8.0 ] ] >> ExpectEqual();
+    ]
+}
+
+functionTest ClampTest {
+    target: Clamp
+    prepare: [
+        [ -0.5, 0.0, 0.4, 1.0, 1.5 ] >> Input;
+        [ 0.0, 0.0, 0.0, 0.0, 0.0 ]  >> MinVal;
+        [ 1.0, 1.0, 1.0, 1.0, 1.0 ]  >> MaxVal;
+    ]
+    validate: [
+        [ Output, [ 0.0, 0.0, 0.4, 1.0, 1.0 ] ] >> ExpectNear(epsilon: 0.0001);
+    ]
+}
+
+functionTest FloorTest {
+    target: Floor
+    prepare: [
+        [ 1.0, 1.9, 2.0, -0.5, -1.2 ] >> Input;
+    ]
+    validate: [
+        [ Output, [ 1.0, 1.0, 2.0, -1.0, -2.0 ] ] >> ExpectNear(epsilon: 0.0001);
+    ]
+}
+
+functionTest WrapTest {
+    target: Wrap
+    prepare: [
+        [ 0.0, 0.5, 1.0, 1.25, 2.5, -0.25 ] >> Input;
+        [ 0.0, 0.0, 0.0, 0.0,  0.0,  0.0   ] >> MinVal;
+        [ 1.0, 1.0, 1.0, 1.0,  1.0,  1.0   ] >> MaxVal;
+    ]
+    validate: [
+        [ Output, [ 0.0, 0.5, 0.0, 0.25, 0.5, 0.75 ] ] >> ExpectNear(epsilon: 0.0001);
+    ]
+}
+
+functionTest LerpTest {
+    target: Lerp
+    prepare: [
+        [ 10.0, 10.0, 10.0, 10.0 ] >> Input;
+        [ 20.0, 20.0, 20.0, 20.0 ] >> Target;
+        [ 0.0,  0.25, 0.5,  1.0  ] >> Factor;
+    ]
+    validate: [
+        [ Output, [ 10.0, 12.5, 15.0, 20.0 ] ] >> ExpectNear(epsilon: 0.0001);
+    ]
+}
+
+functionTest MapTest {
+    target: Map
+    prepare: [
+        [ 0.0,   0.5,   1.0    ] >> Input;
+        [ 0.0,   0.0,   0.0    ] >> InMin;
+        [ 1.0,   1.0,   1.0    ] >> InMax;
+        [ 100.0, 100.0, 100.0  ] >> OutMin;
+        [ 200.0, 200.0, 200.0  ] >> OutMax;
+    ]
+    validate: [
+        [ Output, [ 100.0, 150.0, 200.0 ] ] >> ExpectNear(epsilon: 0.0001);
+    ]
+}
