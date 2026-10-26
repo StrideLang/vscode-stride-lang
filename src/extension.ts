@@ -150,6 +150,8 @@ const TYPE_ALIASES: Record<string, string> = {
     '_Reaction': '_Reaction',
     'loop': '_Loop',
     '_Loop': '_Loop',
+    'constant': '_Constant',
+    '_Constant': '_Constant',
     'state': '_StateType',
     '_StateType': '_StateType',
     'transition': '_TransitionType',
