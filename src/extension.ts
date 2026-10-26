@@ -607,6 +607,7 @@ interface ScopeDeclaration {
     arraySpec?: string;
     generatorVar?: string;
     generatorRange?: string;
+    isAnonymous?: boolean;
 }
 
 interface ScopeContext {
@@ -630,6 +631,7 @@ interface ScopeContext {
     declDefaultVal?: string;
     declBoundBlock?: string;
     enclosingDecls?: EnclosingDecl[];
+    isAnonymous?: boolean;
 }
 
 function stripComments(text: string): string {
@@ -671,11 +673,22 @@ function parseDeclarationsFromBlock(blockBody: string, baseLine: number, filePat
             }
         }
 
+        const isAnonymous = !name;
         const nameVal = extractTopLevelField(pBody, block.maskedBody, 'name');
+        const labelVal = extractTopLevelField(pBody, block.maskedBody, 'label');
         const typeNameVal = extractTopLevelField(pBody, block.maskedBody, 'typeName');
         const blockVal = (kind === 'alias') ? extractTopLevelField(pBody, block.maskedBody, 'entity') : undefined;
 
-        if (!name) {
+        if (isAnonymous) {
+            const innerName = nameVal || labelVal;
+            let anonName = `<${kind}>`;
+            if (innerName) {
+                anonName += ` "${innerName}"`;
+            } else if (bracketContent) {
+                anonName += ` [${bracketContent}]`;
+            }
+            name = anonName;
+        } else if (!name) {
             name = nameVal ||
                    typeNameVal ||
                    blockVal ||
@@ -710,7 +723,8 @@ function parseDeclarationsFromBlock(blockBody: string, baseLine: number, filePat
             boundBlock: declBoundBlock,
             arraySpec,
             generatorVar,
-            generatorRange
+            generatorRange,
+            isAnonymous
         });
     }
 
@@ -768,11 +782,22 @@ function parseScopeTree(text: string, filePath: string, preMaskedText?: string):
             }
         }
 
+        const isAnonymous = !name;
         const nameVal = extractTopLevelField(block.body, block.maskedBody, 'name');
+        const labelVal = extractTopLevelField(block.body, block.maskedBody, 'label');
         const typeNameVal = extractTopLevelField(block.body, block.maskedBody, 'typeName');
         const blockVal = (kind === 'alias') ? extractTopLevelField(block.body, block.maskedBody, 'entity') : undefined;
 
-        if (!name) {
+        if (isAnonymous) {
+            const innerName = nameVal || labelVal;
+            let anonName = `<${kind}>`;
+            if (innerName) {
+                anonName += ` "${innerName}"`;
+            } else if (bracketContent) {
+                anonName += ` [${bracketContent}]`;
+            }
+            name = anonName;
+        } else if (!name) {
             name = nameVal ||
                    typeNameVal ||
                    blockVal ||
@@ -804,7 +829,8 @@ function parseScopeTree(text: string, filePath: string, preMaskedText?: string):
             declType,
             declDomain,
             declDefaultVal,
-            declBoundBlock
+            declBoundBlock,
+            isAnonymous
         };
 
         // If this declaration has a generator variable (e.g. Index in 0:8), bind it inside this scope
@@ -2030,6 +2056,12 @@ function renderLibrarySymbolHover(sym: LibrarySymbol, allSymbols: Map<string, Li
         declTypeStr += `)`;
     }
     body += `- **Declaration Type**: ${declTypeStr}\n`;
+    if (sym.kind === 'constant' && sym.arraySpec) {
+        body += `- **Kind**: \`constant array\`\n`;
+        body += `- **Dimensions**: \`[${sym.arraySpec}]\`\n`;
+    } else if (sym.kind === 'constant') {
+        body += `- **Kind**: \`constant\`\n`;
+    }
 
     if (sym.kind === 'alias' && sym.targetBlock) {
         const targetSym = allSymbols.get(sym.targetBlock);
@@ -2113,8 +2145,13 @@ function registerFallbackProviders(context: ExtensionContext) {
         provideDocumentSymbols(document: TextDocument): DocumentSymbol[] {
             const { scopeTree: rootScope } = getCachedDocData(document);
 
-            function getSymbolKind(kindStr: string): SymbolKind {
-                if (kindStr === 'module' || kindStr === 'reaction' || kindStr === 'loop') {
+            function getSymbolKind(kindStr: string, isAnon?: boolean): SymbolKind {
+                if (isAnon) {
+                    return SymbolKind.Operator;
+                }
+                if (kindStr === 'constant') {
+                    return SymbolKind.Constant;
+                } else if (kindStr === 'module' || kindStr === 'reaction' || kindStr === 'loop') {
                     return SymbolKind.Function;
                 } else if (kindStr === 'state' || kindStr === 'transition') {
                     return SymbolKind.Struct;
@@ -2137,16 +2174,32 @@ function registerFallbackProviders(context: ExtensionContext) {
                     if (!isChildScope) {
                         const dLine = Math.max(0, decl.line - 1);
                         const lineText = document.lineAt(Math.min(dLine, document.lineCount - 1)).text;
-                        const pos = lineText.indexOf(decl.name);
-                        const selRange = new Range(dLine, pos >= 0 ? pos : 0, dLine, pos >= 0 ? pos + decl.name.length : lineText.length);
-                        const fullRange = new Range(dLine, 0, dLine, lineText.length);
-                        let declDetail = decl.kind;
-                        if (decl.generatorVar && decl.generatorRange) {
-                            declDetail = `${decl.generatorVar} in ${decl.generatorRange}`;
-                        } else if (decl.arraySpec) {
-                            declDetail = `${decl.kind} [${decl.arraySpec}]`;
+                        let pos = lineText.indexOf(decl.name);
+                        let len = decl.name.length;
+                        if (pos < 0) {
+                            pos = lineText.indexOf(decl.kind);
+                            len = pos >= 0 ? decl.kind.length : lineText.length;
                         }
-                        const sym = new DocumentSymbol(decl.name, declDetail, getSymbolKind(decl.kind), fullRange, selRange);
+                        const selRange = new Range(dLine, pos >= 0 ? pos : 0, dLine, pos >= 0 ? pos + len : lineText.length);
+                        const fullRange = new Range(dLine, 0, dLine, lineText.length);
+                        let declName = decl.name;
+                        let declDetail = decl.isAnonymous ? `${decl.kind} (anonymous)` : decl.kind;
+                        let symKind = getSymbolKind(decl.kind, decl.isAnonymous);
+
+                        if (decl.kind === 'constant' && decl.arraySpec) {
+                            declName = `${decl.name}[${decl.arraySpec}]`;
+                            declDetail = `constant array [${decl.arraySpec}]`;
+                            symKind = SymbolKind.Array;
+                        } else if (decl.arraySpec) {
+                            declName = `${decl.name}[${decl.arraySpec}]`;
+                            declDetail = `${decl.kind} array [${decl.arraySpec}]`;
+                            symKind = SymbolKind.Array;
+                        } else if (decl.kind === 'constant') {
+                            symKind = SymbolKind.Constant;
+                        } else if (decl.generatorVar && decl.generatorRange) {
+                            declDetail = `${decl.generatorVar} in ${decl.generatorRange}`;
+                        }
+                        const sym = new DocumentSymbol(declName, declDetail, symKind, fullRange, selRange);
                         symbols.push(sym);
                     }
                 }
@@ -2157,21 +2210,37 @@ function registerFallbackProviders(context: ExtensionContext) {
                     const eLine = Math.max(sLine, childScope.endLine - 1);
                     const lineText = document.lineAt(Math.min(sLine, document.lineCount - 1)).text;
                     const endLineText = document.lineAt(Math.min(eLine, document.lineCount - 1)).text;
-                    const pos = lineText.indexOf(childScope.name);
-                    const selRange = new Range(sLine, pos >= 0 ? pos : 0, sLine, pos >= 0 ? pos + childScope.name.length : lineText.length);
+                    let pos = lineText.indexOf(childScope.name);
+                    let len = childScope.name.length;
+                    if (pos < 0) {
+                        pos = lineText.indexOf(childScope.kind);
+                        len = pos >= 0 ? childScope.kind.length : lineText.length;
+                    }
+                    const selRange = new Range(sLine, pos >= 0 ? pos : 0, sLine, pos >= 0 ? pos + len : lineText.length);
                     const fullRange = new Range(sLine, 0, eLine, endLineText.length);
 
-                    let detail = childScope.kind;
-                    if (childScope.generatorVar && childScope.generatorRange) {
-                        detail = `${childScope.kind} [${childScope.generatorVar} in ${childScope.generatorRange}]`;
+                    let scopeName = childScope.name;
+                    let detail = childScope.isAnonymous ? `${childScope.kind} (anonymous)` : childScope.kind;
+                    let symKind = getSymbolKind(childScope.kind, childScope.isAnonymous);
+
+                    if (childScope.kind === 'constant' && childScope.arraySpec) {
+                        scopeName = `${childScope.name}[${childScope.arraySpec}]`;
+                        detail = `constant array [${childScope.arraySpec}]`;
+                        symKind = SymbolKind.Array;
                     } else if (childScope.arraySpec) {
-                        detail = `${childScope.kind} [${childScope.arraySpec}]`;
+                        scopeName = `${childScope.name}[${childScope.arraySpec}]`;
+                        detail = `${childScope.kind} array [${childScope.arraySpec}]`;
+                        symKind = SymbolKind.Array;
+                    } else if (childScope.kind === 'constant') {
+                        symKind = SymbolKind.Constant;
+                    } else if (childScope.generatorVar && childScope.generatorRange) {
+                        detail = `${childScope.kind} [${childScope.generatorVar} in ${childScope.generatorRange}]`;
                     }
 
                     const childNode = new DocumentSymbol(
-                        childScope.name,
+                        scopeName,
                         detail,
-                        getSymbolKind(childScope.kind),
+                        symKind,
                         fullRange,
                         selRange
                     );
@@ -2383,6 +2452,12 @@ function registerFallbackProviders(context: ExtensionContext) {
                     }
                 }
 
+                if (decl.kind === 'constant' && decl.arraySpec) {
+                    body += `- **Kind**: \`constant array\`\n`;
+                    body += `- **Dimensions**: \`[${decl.arraySpec}]\`\n`;
+                } else if (decl.kind === 'constant') {
+                    body += `- **Kind**: \`constant\`\n`;
+                }
                 if (decl.type) {
                     body += `- **Type**: \`${decl.type}\`\n`;
                 }

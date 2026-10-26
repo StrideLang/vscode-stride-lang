@@ -17,8 +17,12 @@
 #include <filesystem>
 #include <cstdlib>
 #include <unordered_set>
+#include <regex>
 
 #ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <io.h>
 #include <fcntl.h>
 #include <windows.h>
@@ -387,6 +391,11 @@ void initLibrary(const std::string &explicitRoot = "") {
             for (const auto &pair : members) {
                 for (const auto &node : pair.second) {
                     g_libraryRootTree->addChild(node);
+                    if (node->getNodeType() == AST::Package) {
+                        for (const auto &pkgChild : node->getChildren()) {
+                            g_libraryRootTree->addChild(pkgChild);
+                        }
+                    }
                 }
             }
         } catch (...) {
@@ -708,26 +717,143 @@ std::shared_ptr<DeclarationNode> findSymbolOrType(const std::string &token, cons
     std::shared_ptr<DeclarationNode> decl = nullptr;
     if (docTree) {
         decl = ASTQuery::findDeclarationByName(token, scopeStack, docTree);
-        if (!decl) {
-            decl = ASTQuery::findTypeDeclarationByName(token, scopeStack, docTree);
-        }
+        if (!decl) decl = ASTQuery::findTypeDeclarationByName(token, scopeStack, docTree);
     }
     if (!decl && importedTree) {
         decl = ASTQuery::findDeclarationByName(token, {}, importedTree);
-        if (!decl) {
-            decl = ASTQuery::findTypeDeclarationByName(token, {}, importedTree);
-        }
+        if (!decl) decl = ASTQuery::findTypeDeclarationByName(token, {}, importedTree);
     }
     if (!decl && g_libraryRootTree) {
         decl = ASTQuery::findDeclarationByName(token, {}, g_libraryRootTree);
-        if (!decl) {
-            decl = ASTQuery::findTypeDeclarationByName(token, {}, g_libraryRootTree);
-        }
+        if (!decl) decl = ASTQuery::findTypeDeclarationByName(token, {}, g_libraryRootTree);
     }
     if (!decl) {
         decl = g_library.findTypeInLibrary(token);
     }
+
+    if (!decl) {
+        static const std::unordered_map<std::string, std::string> ALIASES = {
+            {"constant", "_Constant"}, {"_Constant", "_Constant"},
+            {"module", "_Module"}, {"_Module", "_Module"},
+            {"reaction", "_Reaction"}, {"_Reaction", "_Reaction"},
+            {"loop", "_Loop"}, {"_Loop", "_Loop"},
+            {"state", "_StateType"}, {"_StateType", "_StateType"},
+            {"transition", "_TransitionType"}, {"_TransitionType", "_TransitionType"},
+            {"signal", "_Signal"}, {"_Signal", "_Signal"},
+            {"port", "_Port"}, {"_Port", "_Port"},
+            {"switch", "_Switch"}, {"_Switch", "_Switch"},
+            {"gameDefinition", "_GameDefinitionType"},
+            {"playerType", "_PlayerTypeType"},
+            {"supply", "_SupplyType"},
+            {"entityType", "_EntityTypeType"},
+            {"board", "_BoardType"},
+            {"boardSection", "_BoardSectionType"},
+            {"action", "_ActionType"},
+            {"dict", "_DictionaryType"}
+        };
+        auto aIt = ALIASES.find(token);
+        if (aIt != ALIASES.end()) {
+            std::string alias = aIt->second;
+            if (docTree) {
+                decl = ASTQuery::findDeclarationByName(alias, scopeStack, docTree);
+                if (!decl) decl = ASTQuery::findTypeDeclarationByName(alias, scopeStack, docTree);
+            }
+            if (!decl && importedTree) {
+                decl = ASTQuery::findDeclarationByName(alias, {}, importedTree);
+                if (!decl) decl = ASTQuery::findTypeDeclarationByName(alias, {}, importedTree);
+            }
+            if (!decl && g_libraryRootTree) {
+                decl = ASTQuery::findDeclarationByName(alias, {}, g_libraryRootTree);
+                if (!decl) decl = ASTQuery::findTypeDeclarationByName(alias, {}, g_libraryRootTree);
+            }
+            if (!decl) decl = g_library.findTypeInLibrary(alias);
+        }
+    }
+
+    if (!decl) {
+        // Generic scan for typeName: "token" in doc, imported, and library trees
+        auto matchTypeNameInTree = [&](ASTNode tree) -> std::shared_ptr<DeclarationNode> {
+            if (!tree) return nullptr;
+            for (const auto &node : tree->getChildren()) {
+                if (node->getNodeType() == AST::Declaration) {
+                    auto d = std::static_pointer_cast<DeclarationNode>(node);
+                    ASTNode tn = d->getPropertyValue("typeName");
+                    if (tn && tn->getNodeType() == AST::String) {
+                        if (std::static_pointer_cast<ValueNode>(tn)->getStringValue() == token) {
+                            return d;
+                        }
+                    }
+                }
+            }
+            return nullptr;
+        };
+        if (docTree) decl = matchTypeNameInTree(docTree);
+        if (!decl && importedTree) decl = matchTypeNameInTree(importedTree);
+        if (!decl && g_libraryRootTree) decl = matchTypeNameInTree(g_libraryRootTree);
+    }
     return decl;
+}
+
+std::string formatAllowedTypes(ASTNode allowedNode) {
+    if (!allowedNode) return "";
+    if (allowedNode->getNodeType() == AST::Declaration) {
+        auto decl = std::static_pointer_cast<DeclarationNode>(allowedNode);
+        std::string entityType = decl->getEntityType();
+        if (entityType == "constrainedEntity" || entityType == "constrainedList") {
+            auto allowedProps = decl->getPropertyValue("allowed");
+            if (allowedProps) {
+                std::string inner = formatAllowedTypes(allowedProps);
+                if (entityType == "constrainedList") {
+                    return "List of [" + inner + "]";
+                }
+                return inner;
+            }
+        } else if (entityType == "constrainedInt") {
+            std::string res = "int";
+            auto minVal = decl->getPropertyValue("minimum");
+            auto maxVal = decl->getPropertyValue("maximum");
+            if (minVal || maxVal) {
+                res += " (";
+                if (minVal) res += "min: " + minVal->toText(0, 0, false);
+                if (minVal && maxVal) res += ", ";
+                if (maxVal) res += "max: " + maxVal->toText(0, 0, false);
+                res += ")";
+            }
+            return res;
+        } else if (entityType == "constrainedReal") {
+            std::string res = "real";
+            auto minVal = decl->getPropertyValue("minimum");
+            auto maxVal = decl->getPropertyValue("maximum");
+            if (minVal || maxVal) {
+                res += " (";
+                if (minVal) res += "min: " + minVal->toText(0, 0, false);
+                if (minVal && maxVal) res += ", ";
+                if (maxVal) res += "max: " + maxVal->toText(0, 0, false);
+                res += ")";
+            }
+            return res;
+        } else if (entityType == "constrainedString") {
+            return "string";
+        }
+    } else if (allowedNode->getNodeType() == AST::List) {
+        std::string res;
+        for (const auto &child : allowedNode->getChildren()) {
+            std::string item = formatAllowedTypes(child);
+            if (!item.empty()) {
+                if (!res.empty()) res += ", ";
+                res += item;
+            }
+        }
+        return res;
+    } else if (allowedNode->getNodeType() == AST::Entity) {
+        return std::static_pointer_cast<EntityNode>(allowedNode)->getName();
+    }
+    std::string text = allowedNode->toText(0, 0, false);
+    for (char &c : text) { if (c == '\n' || c == '\r' || c == '\t') c = ' '; }
+    while (text.find("  ") != std::string::npos) {
+        text.replace(text.find("  "), 2, " ");
+    }
+    return text;
 }
 
 std::string renderDeclarationHover(std::shared_ptr<DeclarationNode> decl, const std::string &token, const std::string &docUri) {
@@ -736,6 +862,34 @@ std::string renderDeclarationHover(std::shared_ptr<DeclarationNode> decl, const 
 
     std::string declName = decl->getName();
     std::string entityType = decl->getEntityType();
+    bool isArray = (decl->getNodeType() == AST::ArrayDeclaration);
+    std::shared_ptr<ArrayNode> arrNode = nullptr;
+    if (isArray) {
+        arrNode = decl->getArrayIndex();
+    }
+    std::string arrayDims = "";
+    size_t totalElements = 0;
+    if (arrNode) {
+        std::vector<size_t> indices = arrNode->getIndices();
+        if (!indices.empty()) {
+            arrayDims = "[";
+            totalElements = 1;
+            for (size_t i = 0; i < indices.size(); i++) {
+                if (i > 0) arrayDims += ", ";
+                arrayDims += std::to_string(indices[i]);
+                totalElements *= indices[i];
+            }
+            arrayDims += "]";
+        } else if (arrNode->index() && !arrNode->index()->getChildren().empty()) {
+            arrayDims = "[";
+            const auto &elems = arrNode->index()->getChildren();
+            for (size_t i = 0; i < elems.size(); i++) {
+                if (i > 0) arrayDims += ", ";
+                arrayDims += elems[i]->toText(0, 0, false);
+            }
+            arrayDims += "]";
+        }
+    }
     
     ASTNode typeNameVal = decl->getPropertyValue("typeName");
     std::string typeNameStr = "";
@@ -744,7 +898,11 @@ std::string renderDeclarationHover(std::shared_ptr<DeclarationNode> decl, const 
     }
 
     md << "```stride\n";
-    if (entityType == "type") {
+    if (entityType == "constant" && isArray) {
+        md << "constant array " << declName << arrayDims;
+    } else if (isArray) {
+        md << entityType << " array " << declName << arrayDims;
+    } else if (entityType == "type") {
         md << "type " << declName;
         if (!typeNameStr.empty() && typeNameStr != declName) {
             md << " (typeName: \"" << typeNameStr << "\")";
@@ -759,6 +917,43 @@ std::string renderDeclarationHover(std::shared_ptr<DeclarationNode> decl, const 
         md << entityType << " " << declName;
     }
     md << "\n```\n";
+
+    // Detailed metadata for constant array or scalar constant
+    if (entityType == "constant" && isArray) {
+        md << "- **Kind**: `constant array`\n";
+        if (!arrayDims.empty()) {
+            md << "- **Dimensions**: `" << arrayDims << "`";
+            if (totalElements > 0) {
+                md << " (" << totalElements << " elements)";
+            }
+            md << "\n";
+        }
+        ASTNode valNode = decl->getPropertyValue("value");
+        if (valNode && valNode->getNodeType() == AST::List) {
+            size_t count = valNode->getChildren().size();
+            std::string valPreview = "[ ";
+            size_t previewLimit = std::min(count, (size_t)8);
+            for (size_t i = 0; i < previewLimit; i++) {
+                if (i > 0) valPreview += ", ";
+                valPreview += valNode->getChildren()[i]->toText(0, 0, false);
+            }
+            if (count > previewLimit) {
+                valPreview += ", ... (" + std::to_string(count) + " items) ";
+            } else {
+                valPreview += " ";
+            }
+            valPreview += "]";
+            md << "- **Elements (" << count << ")**: `" << valPreview << "`\n";
+        }
+        md << "\n";
+    } else if (entityType == "constant" && !isArray) {
+        md << "- **Kind**: `constant`\n";
+        ASTNode valNode = decl->getPropertyValue("value");
+        if (valNode) {
+            md << "- **Value**: `" << valNode->toText(0, 0, false) << "`\n";
+        }
+        md << "\n";
+    }
 
     // Meta documentation
     std::string meta = extractMetaDoc(decl);
@@ -795,6 +990,32 @@ std::string renderDeclarationHover(std::shared_ptr<DeclarationNode> decl, const 
         }
     }
 
+    // Special handling for typeProperty / property (show allowed types, default, required)
+    if (entityType == "typeProperty" || entityType == "property") {
+        ASTNode allowedVal = decl->getPropertyValue("allowedTypes");
+        if (!allowedVal) allowedVal = decl->getPropertyValue("types");
+        if (!allowedVal) allowedVal = decl->getPropertyValue("type");
+        if (allowedVal) {
+            std::string typesStr = formatAllowedTypes(allowedVal);
+            if (!typesStr.empty()) {
+                md << "- **Allowed Types**: `" << typesStr << "`\n";
+            }
+        }
+        ASTNode reqVal = decl->getPropertyValue("required");
+        if (reqVal) {
+            std::string reqStr = reqVal->toText(0, 0, false);
+            for (char &c : reqStr) c = tolower(c);
+            bool isReq = (reqStr.find("on") != std::string::npos || reqStr.find("true") != std::string::npos);
+            md << "- **Required**: `" << (isReq ? "on (true)" : "off (false)") << "`\n";
+        }
+        ASTNode defVal = decl->getPropertyValue("default");
+        if (defVal && defVal->getNodeType() != AST::None) {
+            std::string defStr = defVal->toText(0, 0, false);
+            md << "- **Default**: `" << defStr << "`\n";
+        }
+        md << "\n";
+    }
+
     // Inherits
     ASTNode inheritsVal = decl->getPropertyValue("inherits");
     std::vector<std::string> inheritsList;
@@ -829,20 +1050,17 @@ std::string renderDeclarationHover(std::shared_ptr<DeclarationNode> decl, const 
         if (!allowedVal) allowedVal = propDecl->getPropertyValue("types");
         if (!allowedVal) allowedVal = propDecl->getPropertyValue("type");
         if (allowedVal) {
-            std::string tText = allowedVal->toText(0, 0, false);
-            for (char &c : tText) { if (c == '\n' || c == '\r' || c == '\t') c = ' '; }
-            while (tText.find("  ") != std::string::npos) {
-                tText.replace(tText.find("  "), 2, " ");
-            }
+            std::string tText = formatAllowedTypes(allowedVal);
             if (!tText.empty()) {
-                pm << " " << tText;
+                pm << " `" << tText << "`";
             }
         }
 
         ASTNode reqVal = propDecl->getPropertyValue("required");
         if (reqVal) {
             std::string reqStr = reqVal->toText(0, 0, false);
-            if (reqStr == "on" || reqStr == "true") {
+            for (char &c : reqStr) c = tolower(c);
+            if (reqStr.find("on") != std::string::npos || reqStr.find("true") != std::string::npos) {
                 pm << " *(required)*";
             }
         }
@@ -935,6 +1153,338 @@ std::string renderDeclarationHover(std::shared_ptr<DeclarationNode> decl, const 
     return md.str();
 }
 
+struct EnclosingDeclarationInfo {
+    std::string kind;
+    std::string name;
+    bool isFunctionCall = false;
+    std::string functionName;
+    std::string arraySpec;
+    bool isArray = false;
+};
+
+EnclosingDeclarationInfo getEnclosingDeclarationInfo(const std::string &docText, int line, int character, ASTNode docTree) {
+    EnclosingDeclarationInfo res;
+
+    // 1. Check if inside function/action call on current line
+    std::istringstream lStream(docText);
+    std::string lineStr;
+    int curL = 0;
+    std::string beforeCursor = "";
+    while (std::getline(lStream, lineStr)) {
+        if (!lineStr.empty() && lineStr.back() == '\r') lineStr.pop_back();
+        if (curL == line) {
+            int endPos = std::min((int)lineStr.size(), std::max(0, character));
+            beforeCursor = lineStr.substr(0, endPos);
+            break;
+        }
+        curL++;
+    }
+
+    int parenDepth = 0;
+    int lastOpenParen = -1;
+    for (int i = 0; i < (int)beforeCursor.size(); i++) {
+        if (beforeCursor[i] == '(') {
+            parenDepth++;
+            lastOpenParen = i;
+        } else if (beforeCursor[i] == ')') {
+            if (parenDepth > 0) parenDepth--;
+        }
+    }
+
+    if (parenDepth > 0 && lastOpenParen >= 0) {
+        int p = lastOpenParen - 1;
+        while (p >= 0 && (beforeCursor[p] == ' ' || beforeCursor[p] == '\t' || beforeCursor[p] == ']')) {
+            if (beforeCursor[p] == ']') {
+                while (p >= 0 && beforeCursor[p] != '[') p--;
+                p--;
+            } else {
+                p--;
+            }
+        }
+        int endName = p + 1;
+        while (p >= 0 && (isalnum((unsigned char)beforeCursor[p]) || beforeCursor[p] == '_')) {
+            p--;
+        }
+        int startName = p + 1;
+        if (startName < endName) {
+            res.isFunctionCall = true;
+            res.functionName = beforeCursor.substr(startName, endName - startName);
+            return res;
+        }
+    }
+
+    // 2. Find enclosing block declaration { ... }
+    int targetOffset = 0;
+    {
+        std::istringstream stream(docText);
+        std::string curL;
+        int curLNum = 0;
+        while (curLNum < line && std::getline(stream, curL)) {
+            targetOffset += (int)curL.size() + 1;
+            curLNum++;
+        }
+        targetOffset += character;
+    }
+
+    int bestSpan = 1e9;
+    std::regex declHeaderRegex(R"(\b([_a-zA-Z0-9]+)(?:\s+([_a-zA-Z0-9]+))?(?:\s*\[([^\]]*)\])?(?:\s*@\s*[_a-zA-Z0-9]+)?\s*(?=\{))");
+    auto words_begin = std::sregex_iterator(docText.begin(), docText.end(), declHeaderRegex);
+    auto words_end = std::sregex_iterator();
+
+    for (std::sregex_iterator i = words_begin; i != words_end; ++i) {
+        std::smatch match = *i;
+        int headerStart = (int)match.position();
+        int headerEnd = headerStart + (int)match.length();
+
+        int openCount = 1;
+        int bEnd = headerEnd + 1;
+        while (bEnd < (int)docText.size() && openCount > 0) {
+            if (docText[bEnd] == '{') openCount++;
+            else if (docText[bEnd] == '}') openCount--;
+            bEnd++;
+        }
+
+        if (targetOffset >= headerEnd && targetOffset <= bEnd) {
+            int span = bEnd - headerEnd;
+            if (span < bestSpan) {
+                bestSpan = span;
+                res.kind = match[1].str();
+                res.name = match[2].matched ? match[2].str() : "";
+                if (match[3].matched) {
+                    res.arraySpec = match[3].str();
+                    res.isArray = true;
+                } else {
+                    res.arraySpec = "";
+                    res.isArray = false;
+                }
+            }
+        }
+    }
+
+    if (docTree) {
+        int targetLine = line + 1;
+        std::function<void(ASTNode)> traverse = [&](ASTNode node) {
+            if (!node) return;
+            auto decl = std::dynamic_pointer_cast<DeclarationNode>(node);
+            if (decl) {
+                int sLine = decl->getLine();
+                int eLine = decl->getEndLine() > 0 ? decl->getEndLine() : sLine;
+                if (sLine <= targetLine && eLine >= targetLine) {
+                    int span = eLine - sLine;
+                    if (span < bestSpan) {
+                        bestSpan = span;
+                        res.kind = decl->getEntityType();
+                        res.name = decl->getName();
+                        if (decl->getNodeType() == AST::ArrayDeclaration) {
+                            res.isArray = true;
+                        }
+                    }
+                }
+            }
+            for (const auto &child : node->getChildren()) {
+                traverse(child);
+            }
+        };
+        traverse(docTree);
+    }
+
+    return res;
+}
+
+std::string renderPropertyHover(
+    const std::string &propName,
+    const std::string &enclosingKind,
+    const ScopeStack &scopeStack,
+    ASTNode docTree,
+    ASTNode importedTree,
+    const std::string &docUri,
+    const EnclosingDeclarationInfo &encInfo = {}
+) {
+    std::shared_ptr<DeclarationNode> propDecl = nullptr;
+    std::string declaredInType = "";
+
+    auto findPropInDecl = [&](std::shared_ptr<DeclarationNode> tDecl) -> std::shared_ptr<DeclarationNode> {
+        if (!tDecl) return nullptr;
+        ASTNode propsNode = tDecl->getPropertyValue("properties");
+        if (propsNode && propsNode->getNodeType() == AST::List) {
+            for (const auto &child : propsNode->getChildren()) {
+                if (child->getNodeType() == AST::Declaration) {
+                    auto p = std::static_pointer_cast<DeclarationNode>(child);
+                    std::string pName = p->getName();
+                    ASTNode nameVal = p->getPropertyValue("name");
+                    if (nameVal && nameVal->getNodeType() == AST::String) {
+                        pName = std::static_pointer_cast<ValueNode>(nameVal)->getStringValue();
+                    }
+                    if (pName == propName) {
+                        return p;
+                    }
+                }
+            }
+        }
+        return nullptr;
+    };
+
+    std::shared_ptr<DeclarationNode> typeDecl = nullptr;
+    if (!enclosingKind.empty()) {
+        typeDecl = findSymbolOrType(enclosingKind, scopeStack, docTree, importedTree);
+        if (!typeDecl) typeDecl = ASTQuery::findTypeDeclarationByName(enclosingKind, scopeStack, docTree);
+        if (!typeDecl && importedTree) typeDecl = ASTQuery::findTypeDeclarationByName(enclosingKind, {}, importedTree);
+        if (!typeDecl && g_libraryRootTree) typeDecl = ASTQuery::findTypeDeclarationByName(enclosingKind, {}, g_libraryRootTree);
+        if (!typeDecl) typeDecl = g_library.findTypeInLibrary(enclosingKind);
+    }
+
+    if (typeDecl) {
+        propDecl = findPropInDecl(typeDecl);
+        if (propDecl) {
+            declaredInType = typeDecl->getName();
+        } else {
+            // BFS inherited types
+            std::vector<std::string> queue;
+            std::set<std::string> visited;
+            auto inhVal = typeDecl->getPropertyValue("inherits");
+            if (inhVal && inhVal->getNodeType() == AST::List) {
+                for (const auto &inhChild : inhVal->getChildren()) {
+                    if (inhChild->getNodeType() == AST::Entity) {
+                        queue.push_back(std::static_pointer_cast<EntityNode>(inhChild)->getName());
+                    } else if (inhChild->getNodeType() == AST::String) {
+                        queue.push_back(std::static_pointer_cast<ValueNode>(inhChild)->getStringValue());
+                    }
+                }
+            }
+            while (!queue.empty()) {
+                std::string pName = queue.front();
+                queue.erase(queue.begin());
+                if (visited.count(pName)) continue;
+                visited.insert(pName);
+                auto pDecl = findSymbolOrType(pName, scopeStack, docTree, importedTree);
+                if (!pDecl && g_libraryRootTree) pDecl = ASTQuery::findTypeDeclarationByName(pName, {}, g_libraryRootTree);
+                if (!pDecl) pDecl = g_library.findTypeInLibrary(pName);
+                if (pDecl) {
+                    propDecl = findPropInDecl(pDecl);
+                    if (propDecl) {
+                        declaredInType = pName;
+                        break;
+                    }
+                    auto pInh = pDecl->getPropertyValue("inherits");
+                    if (pInh && pInh->getNodeType() == AST::List) {
+                        for (const auto &inhChild : pInh->getChildren()) {
+                            if (inhChild->getNodeType() == AST::Entity) {
+                                queue.push_back(std::static_pointer_cast<EntityNode>(inhChild)->getName());
+                            } else if (inhChild->getNodeType() == AST::String) {
+                                queue.push_back(std::static_pointer_cast<ValueNode>(inhChild)->getStringValue());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Search all known types if not found yet
+    if (!propDecl) {
+        auto searchInTree = [&](ASTNode tree) -> std::shared_ptr<DeclarationNode> {
+            if (!tree) return nullptr;
+            for (const auto &node : tree->getChildren()) {
+                if (node->getNodeType() == AST::Declaration) {
+                    auto decl = std::static_pointer_cast<DeclarationNode>(node);
+                    if (decl->getEntityType() == "type") {
+                        auto found = findPropInDecl(decl);
+                        if (found) {
+                            declaredInType = decl->getName();
+                            return found;
+                        }
+                    }
+                }
+            }
+            return nullptr;
+        };
+        if (docTree) propDecl = searchInTree(docTree);
+        if (!propDecl && importedTree) propDecl = searchInTree(importedTree);
+        if (!propDecl && g_libraryRootTree) propDecl = searchInTree(g_libraryRootTree);
+    }
+
+    if (propDecl) {
+        std::ostringstream md;
+        md << "### Property: `" << propName << "`";
+        if (!enclosingKind.empty()) {
+            if (enclosingKind == "constant" && encInfo.isArray) {
+                md << " *(on `constant array " << encInfo.name;
+                if (!encInfo.arraySpec.empty()) md << "[" << encInfo.arraySpec << "]";
+                md << "`)*";
+            } else {
+                md << " *(on `" << enclosingKind << "`";
+                if (!declaredInType.empty() && declaredInType != enclosingKind) {
+                    md << " via `" << declaredInType << "`";
+                }
+                md << ")*";
+            }
+        }
+        md << "\n\n";
+
+        ASTNode allowedVal = propDecl->getPropertyValue("allowedTypes");
+        if (!allowedVal) allowedVal = propDecl->getPropertyValue("types");
+        if (!allowedVal) allowedVal = propDecl->getPropertyValue("type");
+        if (allowedVal) {
+            std::string typesStr = formatAllowedTypes(allowedVal);
+            if (!typesStr.empty()) {
+                md << "- **Allowed Types**: `" << typesStr << "`\n";
+            }
+        }
+
+        ASTNode reqVal = propDecl->getPropertyValue("required");
+        if (reqVal) {
+            std::string reqStr = reqVal->toText(0, 0, false);
+            for (char &c : reqStr) c = tolower(c);
+            bool isReq = (reqStr.find("on") != std::string::npos || reqStr.find("true") != std::string::npos);
+            md << "- **Required**: `" << (isReq ? "on (true)" : "off (false)") << "`\n";
+        }
+
+        ASTNode defVal = propDecl->getPropertyValue("default");
+        if (defVal && defVal->getNodeType() != AST::None) {
+            std::string defStr = defVal->toText(0, 0, false);
+            md << "- **Default**: `" << defStr << "`\n";
+        }
+
+        std::string pMeta = extractMetaDoc(propDecl);
+        if (!pMeta.empty()) {
+            md << "\n---\n*" << pMeta << "*\n";
+        }
+
+        if (!propDecl->getFilename().empty()) {
+            std::error_code ec;
+            std::filesystem::path p = std::filesystem::absolute(propDecl->getFilename(), ec);
+            if (ec) p = std::filesystem::path(propDecl->getFilename());
+            std::string linkPath = p.generic_string();
+            int pLine = propDecl->getLine();
+            md << "\n---\n📍 **Declared in**: [" << p.filename().string() << ":" << pLine << "](file:///" << linkPath << "#L" << pLine << ")";
+            if (!declaredInType.empty()) {
+                md << " (type `" << declaredInType << "`)";
+            }
+            md << "\n";
+        }
+        return md.str();
+    }
+
+    // Built-in properties fallback with Allowed Types information
+    if (propName == "type") return "### Property: `type`\n\n- **Allowed Types**: `_DataType, _TypeClass`\n\nSpecifies the data type or class constraint of this property or signal.";
+    if (propName == "name") return "### Property: `name`\n\n- **Allowed Types**: `_StringLiteral`\n\nIdentifier name of the entity or port.";
+    if (propName == "entity") return "### Property: `entity`\n\n- **Allowed Types**: `_Entity`\n\nSpecifies the target entity or type referenced by an `alias` declaration.";
+    if (propName == "default") return "### Property: `default`\n\n- **Allowed Types**: `_Any`\n\nDefault or initial value for this signal or property.";
+    if (propName == "value") return "### Property: `value`\n\n- **Allowed Types**: `_StringLiteral, _IntLiteral, _RealLiteral, _SwitchLiteral, _Constant, _ResourceType, _NoneLiteral`\n\nCurrent or constant value of this entity.";
+    if (propName == "domain") return "### Property: `domain`\n\n- **Allowed Types**: `_DomainDefinition`\n\nExecution domain coordinator governing rate and thread context.";
+    if (propName == "rate") return "### Property: `rate`\n\n- **Allowed Types**: `_IntLiteral, _RealLiteral`\n\nProcessing rate (sampling frequency in Hz) for this block or domain.";
+    if (propName == "meta") return "### Property: `meta`\n\n- **Allowed Types**: `_StringLiteral`\n\nDocumentation description string displayed on hover and in outline summaries.";
+    if (propName == "ports") return "### Property: `ports`\n\n- **Allowed Types**: `List of [_Port]`\n\nList of input and output ports for this module or platform entity.";
+    if (propName == "properties") return "### Property: `properties`\n\n- **Allowed Types**: `List of [typeProperty]`\n\nList of typed schema properties defined on this type.";
+    if (propName == "blocks") return "### Property: `blocks`\n\n- **Allowed Types**: `List of [_Block]`\n\nChild blocks or entities contained within this block.";
+    if (propName == "inputs") return "### Property: `inputs`\n\n- **Allowed Types**: `List of [Port]`\n\nInput signal ports or connections.";
+    if (propName == "outputs") return "### Property: `outputs`\n\n- **Allowed Types**: `List of [Port]`\n\nOutput signal ports or connections.";
+    if (propName == "guard") return "### Property: `guard`\n\n- **Allowed Types**: `_Switch`\n\nBoolean condition guard that must evaluate to `on` / `true` for a transition to fire.";
+    if (propName == "targetState") return "### Property: `targetState`\n\n- **Allowed Types**: `_State`\n\nDestination state activated by this transition.";
+
+    return "### Property: `" + propName + "`\n\nConfiguration property for the enclosing declaration.";
+}
+
 void handleHover(const std::string &id, const std::string &uri, int line, int character) {
     auto it = openDocuments.find(uri);
     std::string hoverText = "";
@@ -943,48 +1493,73 @@ void handleHover(const std::string &id, const std::string &uri, int line, int ch
         TokenAtPosition tokenInfo = getTokenAtPosition(it->second.text, line, character);
         std::string token = tokenInfo.token;
         if (!token.empty()) {
+            ScopeStack scopeStack;
+            if (it->second.tree) {
+                scopeStack = buildScopeStackForPosition(it->second.tree, line + 1);
+            }
+
             if (tokenInfo.followedByColon) {
                 // Property key resolution (AGENTS.md Rule 5)
-                if (token == "type") {
-                    hoverText = "### Property: `type`\n\nSpecifies the data type or class constraint of this property or signal.";
-                } else if (token == "name") {
-                    hoverText = "### Property: `name`\n\nIdentifier name of the entity or port.";
-                } else if (token == "entity") {
-                    hoverText = "### Property: `entity`\n\nSpecifies the target entity or type referenced by an `alias` declaration.";
-                } else if (token == "default") {
-                    hoverText = "### Property: `default`\n\nDefault or initial value for this signal or property.";
-                } else if (token == "value") {
-                    hoverText = "### Property: `value`\n\nCurrent or constant value of this entity.";
-                } else if (token == "domain") {
-                    hoverText = "### Property: `domain`\n\nExecution domain coordinator governing rate and thread context.";
-                } else if (token == "rate") {
-                    hoverText = "### Property: `rate`\n\nProcessing rate (sampling frequency in Hz) for this block or domain.";
-                } else if (token == "meta") {
-                    hoverText = "### Property: `meta`\n\nDocumentation description string displayed on hover and in outline summaries.";
-                } else if (token == "ports") {
-                    hoverText = "### Property: `ports`\n\nList of input and output ports for this module or platform entity.";
-                } else if (token == "properties") {
-                    hoverText = "### Property: `properties`\n\nList of typed schema properties defined on this type.";
-                } else if (token == "blocks") {
-                    hoverText = "### Property: `blocks`\n\nChild blocks or entities contained within this block.";
-                } else if (token == "inputs") {
-                    hoverText = "### Property: `inputs`\n\nInput signal ports or connections.";
-                } else if (token == "outputs") {
-                    hoverText = "### Property: `outputs`\n\nOutput signal ports or connections.";
-                } else if (token == "guard") {
-                    hoverText = "### Property: `guard`\n\nBoolean condition guard that must evaluate to `on` / `true` for a transition to fire.";
-                } else if (token == "targetState") {
-                    hoverText = "### Property: `targetState`\n\nDestination state activated by this transition.";
+                EnclosingDeclarationInfo encInfo = getEnclosingDeclarationInfo(it->second.text, line, character, it->second.tree);
+                if (encInfo.isFunctionCall && !encInfo.functionName.empty()) {
+                    auto funcDecl = findSymbolOrType(encInfo.functionName, scopeStack, it->second.tree, it->second.importedTree);
+                    std::shared_ptr<DeclarationNode> foundPort = nullptr;
+                    if (funcDecl) {
+                        auto portsVal = funcDecl->getPropertyValue("ports");
+                        if (portsVal && portsVal->getNodeType() == AST::List) {
+                            for (const auto &pChild : portsVal->getChildren()) {
+                                if (pChild->getNodeType() == AST::Declaration) {
+                                    auto p = std::static_pointer_cast<DeclarationNode>(pChild);
+                                    std::string pName = p->getName();
+                                    ASTNode nVal = p->getPropertyValue("name");
+                                    if (nVal && nVal->getNodeType() == AST::String) {
+                                        pName = std::static_pointer_cast<ValueNode>(nVal)->getStringValue();
+                                    }
+                                    if (pName == token) {
+                                        foundPort = p;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (foundPort) {
+                        std::ostringstream md;
+                        md << "**Parameter**: `" << token << "` *(for `" << encInfo.functionName << "`)*\n\n";
+                        ASTNode pType = foundPort->getPropertyValue("allowedTypes");
+                        if (!pType) pType = foundPort->getPropertyValue("types");
+                        if (!pType) pType = foundPort->getPropertyValue("type");
+                        if (pType) {
+                            std::string tStr = formatAllowedTypes(pType);
+                            if (!tStr.empty()) md << "- **Allowed Types**: `" << tStr << "`\n";
+                        }
+                        ASTNode reqVal = foundPort->getPropertyValue("required");
+                        if (reqVal) {
+                            std::string reqStr = reqVal->toText(0, 0, false);
+                            for (char &c : reqStr) c = tolower(c);
+                            bool isReq = (reqStr.find("on") != std::string::npos || reqStr.find("true") != std::string::npos);
+                            md << "- **Required**: `" << (isReq ? "on (true)" : "off (false)") << "`\n";
+                        }
+                        ASTNode defVal = foundPort->getPropertyValue("default");
+                        if (defVal && defVal->getNodeType() != AST::None) {
+                            md << "- **Default**: `" << defVal->toText(0, 0, false) << "`\n";
+                        }
+                        std::string pMeta = extractMetaDoc(foundPort);
+                        if (!pMeta.empty()) md << "\n---\n*" << pMeta << "*\n";
+                        if (!foundPort->getFilename().empty()) {
+                            std::error_code ec;
+                            std::filesystem::path p = std::filesystem::absolute(foundPort->getFilename(), ec);
+                            if (ec) p = std::filesystem::path(foundPort->getFilename());
+                            md << "\n---\n📍 **Declared in**: [" << p.filename().string() << ":" << foundPort->getLine() << "](file:///" << p.generic_string() << "#L" << foundPort->getLine() << ")\n";
+                        }
+                        hoverText = md.str();
+                    } else {
+                        hoverText = renderPropertyHover(token, encInfo.kind, scopeStack, it->second.tree, it->second.importedTree, uri, encInfo);
+                    }
                 } else {
-                    hoverText = "### Property: `" + token + "`\n\nConfiguration property for the enclosing declaration.";
+                    hoverText = renderPropertyHover(token, encInfo.kind, scopeStack, it->second.tree, it->second.importedTree, uri, encInfo);
                 }
             } else {
-                // Dynamic resolution across scope stack, current tree, and standard library schemas
-                ScopeStack scopeStack;
-                if (it->second.tree) {
-                    scopeStack = buildScopeStackForPosition(it->second.tree, line + 1);
-                }
-
                 std::shared_ptr<DeclarationNode> decl = findSymbolOrType(token, scopeStack, it->second.tree, it->second.importedTree);
                 std::shared_ptr<DeclarationNode> portForBlock = nullptr;
                 if (it->second.tree) {
@@ -1041,20 +1616,113 @@ std::string renderDocumentSymbol(ASTNode node) {
     auto decl = std::dynamic_pointer_cast<DeclarationNode>(node);
     if (!decl || decl->getName().empty()) return "";
 
-    int symbolKind = 13; // Variable default
+    std::string declName = decl->getName();
     std::string type = decl->getEntityType();
-    if (type == "module" || type == "reaction" || type == "loop") {
-        symbolKind = 6; // Method / Function
-    } else if (type == "state" || type == "transition") {
-        symbolKind = 23; // Struct
-    } else if (type == "_domainDefinition" || type == "gameDefinition" || type == "domainDeclaration" || type == "type") {
-        symbolKind = 5; // Class
-    } else if (type == "typeProperty" || type == "property") {
-        symbolKind = 7; // Property
-    } else if (type.find("Port") != std::string::npos || type == "port") {
-        symbolKind = 11; // Interface
-    } else if (type == "signal" || type == "switch" || type == "trigger") {
-        symbolKind = 13; // Variable
+
+    bool isAnon = false;
+    if (declName.rfind("___Anonymous___", 0) == 0 ||
+        declName.rfind("__Anonymous__", 0) == 0 ||
+        declName.rfind("___anonymous___", 0) == 0 ||
+        declName.find("Anonymous") != std::string::npos ||
+        decl->getCompilerProperty("anonymous") != nullptr) {
+        isAnon = true;
+    }
+
+    std::string innerName = "";
+    if (isAnon) {
+        ASTNode nameProp = decl->getPropertyValue("name");
+        if (nameProp && nameProp->getNodeType() == AST::String) {
+            innerName = std::static_pointer_cast<ValueNode>(nameProp)->getStringValue();
+        }
+        if (innerName.empty()) {
+            ASTNode labelProp = decl->getPropertyValue("label");
+            if (labelProp && labelProp->getNodeType() == AST::String) {
+                innerName = std::static_pointer_cast<ValueNode>(labelProp)->getStringValue();
+            }
+        }
+    }
+
+    std::string genSpec = "";
+    auto genVar = decl->getCompilerProperty("_generatorVar");
+    auto genRange = decl->getCompilerProperty("_generatorRange");
+    if (genVar && genRange) {
+        std::string v = genVar->toText(0, 0, false);
+        std::string r = genRange->toText(0, 0, false);
+        for (char &c : v) { if (c == '\n' || c == '\r') c = ' '; }
+        for (char &c : r) { if (c == '\n' || c == '\r') c = ' '; }
+        genSpec = v + " in " + r;
+    }
+
+    bool isArray = (decl->getNodeType() == AST::ArrayDeclaration);
+    std::string arrayDims = "";
+    if (isArray) {
+        auto arrNode = decl->getArrayIndex();
+        if (arrNode) {
+            std::vector<size_t> indices = arrNode->getIndices();
+            if (!indices.empty()) {
+                arrayDims = "[";
+                for (size_t i = 0; i < indices.size(); i++) {
+                    if (i > 0) arrayDims += ", ";
+                    arrayDims += std::to_string(indices[i]);
+                }
+                arrayDims += "]";
+            } else if (arrNode->index() && !arrNode->index()->getChildren().empty()) {
+                arrayDims = "[";
+                const auto &elems = arrNode->index()->getChildren();
+                for (size_t i = 0; i < elems.size(); i++) {
+                    if (i > 0) arrayDims += ", ";
+                    arrayDims += elems[i]->toText(0, 0, false);
+                }
+                arrayDims += "]";
+            }
+        }
+    }
+
+    int symbolKind = 13; // Variable default
+    std::string displayName;
+    std::string detail = type;
+
+    if (isAnon) {
+        // Enclose type name with angle brackets to distinguish anonymous declarations
+        displayName = "<" + type + ">";
+        if (!innerName.empty()) {
+            displayName += " \"" + innerName + "\"";
+        } else if (!genSpec.empty()) {
+            displayName += " [" + genSpec + "]";
+        }
+        detail = type + " (anonymous)";
+        // Use SymbolKind.Operator (25) to provide a distinct symbol and color in VS Code's Outline
+        symbolKind = 25;
+    } else {
+        if (type == "constant" && isArray) {
+            displayName = declName + arrayDims;
+            detail = "constant array " + arrayDims;
+            symbolKind = 18; // SymbolKind.Array (18)
+        } else if (isArray) {
+            displayName = declName + arrayDims;
+            detail = type + " array " + arrayDims;
+            symbolKind = 18; // SymbolKind.Array (18)
+        } else {
+            displayName = declName;
+            if (type == "constant") {
+                symbolKind = 14; // SymbolKind.Constant (14)
+            } else if (type == "module" || type == "reaction" || type == "loop") {
+                symbolKind = 6; // Method / Function
+            } else if (type == "state" || type == "transition") {
+                symbolKind = 23; // Struct
+            } else if (type == "_domainDefinition" || type == "gameDefinition" || type == "domainDeclaration" || type == "type") {
+                symbolKind = 5; // Class
+            } else if (type == "typeProperty" || type == "property") {
+                symbolKind = 7; // Property
+            } else if (type.find("Port") != std::string::npos || type == "port") {
+                symbolKind = 11; // Interface
+            } else if (type == "signal" || type == "switch" || type == "trigger") {
+                symbolKind = 13; // Variable
+            }
+            if (!genSpec.empty()) {
+                detail = type + " [" + genSpec + "]";
+            }
+        }
     }
 
     int startLine = (decl->getLine() > 0) ? (decl->getLine() - 1) : 0;
@@ -1084,8 +1752,8 @@ std::string renderDocumentSymbol(ASTNode node) {
 
     std::ostringstream s;
     s << "{";
-    s << "\"name\":\"" << escapeJson(decl->getName()) << "\",";
-    s << "\"detail\":\"" << escapeJson(type) << "\",";
+    s << "\"name\":\"" << escapeJson(displayName) << "\",";
+    s << "\"detail\":\"" << escapeJson(detail) << "\",";
     s << "\"kind\":" << symbolKind << ",";
     s << "\"range\":{\"start\":{\"line\":" << startLine << ",\"character\":0},\"end\":{\"line\":" << endLine << ",\"character\":100}},";
     s << "\"selectionRange\":{\"start\":{\"line\":" << startLine << ",\"character\":0},\"end\":{\"line\":" << startLine << ",\"character\":100}}";
