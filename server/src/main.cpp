@@ -240,6 +240,9 @@ std::string extractMetaDoc(ASTNode node) {
 struct TokenAtPosition {
     std::string token;
     bool followedByColon = false;
+    bool precededByDot = false;
+    bool followedByDot = false;
+    std::string dotTargetEntity;
 };
 
 TokenAtPosition getTokenAtPosition(const std::string &content, int line, int character) {
@@ -275,6 +278,27 @@ TokenAtPosition getTokenAtPosition(const std::string &content, int line, int cha
                 }
                 if (after < (int)lineStr.size() && lineStr[after] == ':') {
                     res.followedByColon = true;
+                }
+                if (after < (int)lineStr.size() && lineStr[after] == '.') {
+                    res.followedByDot = true;
+                }
+                int before = start - 1;
+                while (before >= 0 && (lineStr[before] == ' ' || lineStr[before] == '\t')) {
+                    before--;
+                }
+                if (before >= 0 && lineStr[before] == '.') {
+                    res.precededByDot = true;
+                    int entEnd = before;
+                    while (entEnd > 0 && (lineStr[entEnd - 1] == ' ' || lineStr[entEnd - 1] == '\t')) {
+                        entEnd--;
+                    }
+                    int entStart = entEnd;
+                    while (entStart > 0 && (isalnum((unsigned char)lineStr[entStart - 1]) || lineStr[entStart - 1] == '_' || lineStr[entStart - 1] == '@')) {
+                        entStart--;
+                    }
+                    if (entStart < entEnd) {
+                        res.dotTargetEntity = lineStr.substr(entStart, entEnd - entStart);
+                    }
                 }
                 return res;
             }
@@ -343,6 +367,7 @@ std::shared_ptr<DeclarationNode> findPortForBlockInScopeStack(const ScopeStack &
                 std::string type = decl->getEntityType();
                 if (type.find("Port") != std::string::npos || type == "port") {
                     auto blockVal = decl->getPropertyValue("block");
+                    if (!blockVal) blockVal = decl->getPropertyValue("entity");
                     if (blockVal) {
                         auto entNode = std::dynamic_pointer_cast<EntityNode>(blockVal);
                         if (entNode && entNode->getName() == blockName) return decl;
@@ -434,6 +459,13 @@ void publishDiagnostics(const std::string &uri, const std::vector<LangError> &er
         if (err.type == LangError::InvalidPort) {
             if (err.errorTokens.size() > 1) searchTokens.push_back(err.errorTokens[1]);
             if (err.errorTokens.size() > 0) searchTokens.push_back(err.errorTokens[0]);
+        } else if (err.type == LangError::ReadOnlyPort || err.type == LangError::PrivatePort) {
+            if (err.errorTokens.size() > 1) searchTokens.push_back(err.errorTokens[1]);
+            if (err.errorTokens.size() > 0) searchTokens.push_back(err.errorTokens[0]);
+        } else if (err.type == LangError::HeaderPortsWithPortsProperty || err.type == LangError::CodeWithEntitiesOrStreams || err.type == LangError::ReactionMainInput) {
+            if (err.errorTokens.size() > 1) searchTokens.push_back(err.errorTokens[1]);
+            if (err.errorTokens.size() > 2) searchTokens.push_back(err.errorTokens[2]);
+            if (!err.errorTokens.empty()) searchTokens.push_back(err.errorTokens[0]);
         } else if (err.type == LangError::InvalidPortType) {
             if (err.errorTokens.size() > 2) searchTokens.push_back(err.errorTokens[2]);
             if (err.errorTokens.size() > 1) searchTokens.push_back(err.errorTokens[1]);
@@ -441,6 +473,12 @@ void publishDiagnostics(const std::string &uri, const std::vector<LangError> &er
         } else if (err.type == LangError::ConstraintFail) {
             if (err.errorTokens.size() > 3) searchTokens.push_back(err.errorTokens[3]);
             if (err.errorTokens.size() > 1) searchTokens.push_back(err.errorTokens[1]);
+        } else if (err.type == LangError::DuplicateSymbol) {
+            if (!err.errorTokens.empty()) searchTokens.push_back(err.errorTokens[0]);
+        } else if (err.type == LangError::UndeclaredSymbol) {
+            if (!err.errorTokens.empty()) searchTokens.push_back(err.errorTokens[0]);
+        } else if (err.type == LangError::ArrayIndexOutOfBounds || err.type == LangError::InvalidIndexType) {
+            if (!err.errorTokens.empty()) searchTokens.push_back(err.errorTokens[0]);
         } else if (err.type == LangError::LossyConversion) {
             // Tokens are type names and a reason. Mark the whole stream line.
         } else {
@@ -622,9 +660,9 @@ void analyzeDocument(DocumentState &doc) {
             // Safety catch
         }
 
-        // 3. Warn about conversions that can lose data. They are only known
-        // after resolving data types, which changes the tree, so a copy is
-        // resolved. Only run resolver if the document has no fatal syntax errors.
+        // 3. Run CodeResolver and full CodeValidator on resolved AST.
+        // Validates symbol uniqueness, array bounds/sizes, stream sizes, constraints,
+        // and detects lossy conversions.
         if (!g_strideRoot.empty() && doc.errors.empty()) {
             try {
                 ASTNode resolved = AST::parseFile(tempFile.c_str(), currentPath.c_str());
@@ -632,8 +670,16 @@ void analyzeDocument(DocumentState &doc) {
                     ASTFunctions::preprocess(resolved, nullptr, importPaths, g_strideRoot);
                     CodeResolver resolver(resolved, g_strideRoot);
                     if (safeResolveProcess(&resolver)) {
-                        for (const auto &warning :
-                             CodeValidator::findLossyConversions(resolved)) {
+                        CodeValidator validator(resolved, CodeValidator::NO_RATE_VALIDATION);
+                        for (const auto &err : validator.getErrors()) {
+                            if (err.filename == tempFile ||
+                                err.filename == doc.uri ||
+                                err.filename.empty() ||
+                                err.filename == currentPath) {
+                                doc.errors.push_back(err);
+                            }
+                        }
+                        for (const auto &warning : validator.getWarnings()) {
                             if (warning.filename == tempFile ||
                                 warning.filename == doc.uri ||
                                 warning.filename.empty() ||
@@ -644,7 +690,7 @@ void analyzeDocument(DocumentState &doc) {
                     }
                 }
             } catch (...) {
-                // Resolver safety catch
+                // Resolver / validator safety catch
             }
         }
     } else {
@@ -653,6 +699,20 @@ void analyzeDocument(DocumentState &doc) {
     }
 
     std::remove(tempFile.c_str());
+
+    // Deduplicate errors and warnings before publishing
+    std::vector<LangError> uniqueErrors;
+    std::set<std::tuple<int, int, std::string>> seenErrors;
+    for (const auto &err : doc.errors) {
+        std::string tokStr;
+        for (const auto &t : err.errorTokens) tokStr += t + ";";
+        auto key = std::make_tuple((int)err.type, err.lineNumber, tokStr);
+        if (seenErrors.insert(key).second) {
+            uniqueErrors.push_back(err);
+        }
+    }
+    doc.errors = std::move(uniqueErrors);
+
     publishDiagnostics(doc.uri, doc.errors, doc.text);
 }
 
@@ -1147,7 +1207,7 @@ std::string renderDeclarationHover(std::shared_ptr<DeclarationNode> decl, const 
         std::error_code ec;
         std::filesystem::path p = std::filesystem::absolute(decl->getFilename(), ec);
         if (ec) p = std::filesystem::path(decl->getFilename());
-        md << "📍 *Defined in " << p.filename().string() << "*\n";
+        md << "\xF0\x9F\x93\x8D" " *Defined in " << p.filename().string() << "*\n";
     }
 
     return md.str();
@@ -1289,6 +1349,27 @@ EnclosingDeclarationInfo getEnclosingDeclarationInfo(const std::string &docText,
     }
 
     return res;
+}
+
+std::shared_ptr<DeclarationNode> findPropertyInDeclaration(std::shared_ptr<DeclarationNode> tDecl, const std::string &propName) {
+    if (!tDecl) return nullptr;
+    ASTNode propsNode = tDecl->getPropertyValue("properties");
+    if (propsNode && propsNode->getNodeType() == AST::List) {
+        for (const auto &child : propsNode->getChildren()) {
+            if (child->getNodeType() == AST::Declaration) {
+                auto p = std::static_pointer_cast<DeclarationNode>(child);
+                std::string pName = p->getName();
+                ASTNode nameVal = p->getPropertyValue("name");
+                if (nameVal && nameVal->getNodeType() == AST::String) {
+                    pName = std::static_pointer_cast<ValueNode>(nameVal)->getStringValue();
+                }
+                if (pName == propName) {
+                    return p;
+                }
+            }
+        }
+    }
+    return nullptr;
 }
 
 std::string renderPropertyHover(
@@ -1456,7 +1537,7 @@ std::string renderPropertyHover(
             if (ec) p = std::filesystem::path(propDecl->getFilename());
             std::string linkPath = p.generic_string();
             int pLine = propDecl->getLine();
-            md << "\n---\n📍 **Declared in**: [" << p.filename().string() << ":" << pLine << "](file:///" << linkPath << "#L" << pLine << ")";
+            md << "\n---\n\xF0\x9F\x93\x8D" " **Declared in**: [" << p.filename().string() << ":" << pLine << "](file:///" << linkPath << "#L" << pLine << ")";
             if (!declaredInType.empty()) {
                 md << " (type `" << declaredInType << "`)";
             }
@@ -1475,6 +1556,11 @@ std::string renderPropertyHover(
     if (propName == "rate") return "### Property: `rate`\n\n- **Allowed Types**: `_IntLiteral, _RealLiteral`\n\nProcessing rate (sampling frequency in Hz) for this block or domain.";
     if (propName == "meta") return "### Property: `meta`\n\n- **Allowed Types**: `_StringLiteral`\n\nDocumentation description string displayed on hover and in outline summaries.";
     if (propName == "ports") return "### Property: `ports`\n\n- **Allowed Types**: `List of [_Port]`\n\nList of input and output ports for this module or platform entity.";
+    if (propName == "code") return "### Property: `code`\n\n- **Allowed Types**: `List of [Declaration, Stream]`\n\nUnified callable body combining internal entity declarations and stream pipelines.";
+    if (propName == "entities") return "### Property: `entities`\n\n- **Allowed Types**: `List of [_Block]`\n\nInternal entity declarations contained within this callable (synonym for `blocks`).";
+    if (propName == "until") return "### Property: `until`\n\n- **Allowed Types**: `_Switch, _Signal`\n\nTermination switch or condition signal for short-circuit loop execution.";
+    if (propName == "maxIterations") return "### Property: `maxIterations`\n\n- **Allowed Types**: `_IntLiteral`\n\nMaximum iteration limit for loop execution.";
+    if (propName == "iterator") return "### Property: `iterator`\n\n- **Allowed Types**: `_Signal`\n\nInternal iterator variable signal for loop execution.";
     if (propName == "properties") return "### Property: `properties`\n\n- **Allowed Types**: `List of [typeProperty]`\n\nList of typed schema properties defined on this type.";
     if (propName == "blocks") return "### Property: `blocks`\n\n- **Allowed Types**: `List of [_Block]`\n\nChild blocks or entities contained within this block.";
     if (propName == "inputs") return "### Property: `inputs`\n\n- **Allowed Types**: `List of [Port]`\n\nInput signal ports or connections.";
@@ -1498,7 +1584,22 @@ void handleHover(const std::string &id, const std::string &uri, int line, int ch
                 scopeStack = buildScopeStackForPosition(it->second.tree, line + 1);
             }
 
-            if (tokenInfo.followedByColon) {
+            if (tokenInfo.precededByDot && !tokenInfo.dotTargetEntity.empty()) {
+                auto entDecl = findSymbolOrType(tokenInfo.dotTargetEntity, scopeStack, it->second.tree, it->second.importedTree);
+                std::string entType = entDecl ? entDecl->getEntityType() : "";
+                if (entDecl) {
+                    auto typeVal = entDecl->getPropertyValue("type");
+                    if (typeVal && typeVal->getNodeType() == AST::String) {
+                        entType = std::static_pointer_cast<ValueNode>(typeVal)->getStringValue();
+                    }
+                }
+                if (!entType.empty()) {
+                    hoverText = renderPropertyHover(token, entType, scopeStack, it->second.tree, it->second.importedTree, uri);
+                }
+                if (hoverText.empty()) {
+                    hoverText = renderPropertyHover(token, tokenInfo.dotTargetEntity, scopeStack, it->second.tree, it->second.importedTree, uri);
+                }
+            } else if (tokenInfo.followedByColon) {
                 // Property key resolution (AGENTS.md Rule 5)
                 EnclosingDeclarationInfo encInfo = getEnclosingDeclarationInfo(it->second.text, line, character, it->second.tree);
                 if (encInfo.isFunctionCall && !encInfo.functionName.empty()) {
@@ -1550,7 +1651,7 @@ void handleHover(const std::string &id, const std::string &uri, int line, int ch
                             std::error_code ec;
                             std::filesystem::path p = std::filesystem::absolute(foundPort->getFilename(), ec);
                             if (ec) p = std::filesystem::path(foundPort->getFilename());
-                            md << "\n---\n📍 **Declared in**: [" << p.filename().string() << ":" << foundPort->getLine() << "](file:///" << p.generic_string() << "#L" << foundPort->getLine() << ")\n";
+                            md << "\n---\n\xF0\x9F\x93\x8D" " **Declared in**: [" << p.filename().string() << ":" << foundPort->getLine() << "](file:///" << p.generic_string() << "#L" << foundPort->getLine() << ")\n";
                         }
                         hoverText = md.str();
                     } else {
@@ -1792,25 +1893,148 @@ void handleDocumentSymbols(const std::string &id, const std::string &uri) {
     sendLspResponse(json.str());
 }
 
-void handleCompletion(const std::string &id) {
-    static const char *keywords[] = {
-        "_domainDefinition", "gameDefinition", "module", "reaction", "loop",
-        "state", "transition", "platformModule", "platformFunction", "type",
-        "signal", "switch", "trigger", "mainInputPort", "mainOutputPort",
-        "propertyInputPort", "propertyOutputPort", "import", "use", "version",
-        "streamRate", "in", "on", "off", "none", "_IntType", "_RealType", "_SwitchType",
-        "_StateType", "default:", "reset:", "domain:", "type:", "rate:", "meta:",
-        "framework:", "inputs:", "outputs:", "states:", "transitions:", "guard:", "targetState:"
+void handleCompletion(const std::string &id, const std::string &uri = "", int line = 0, int character = 0) {
+    struct CompItem {
+        std::string label;
+        int kind;
+        std::string detail;
+        std::string doc;
     };
+    std::vector<CompItem> items;
+    std::unordered_set<std::string> seen;
+
+    auto addItem = [&](const std::string &label, int kind, const std::string &detail = "", const std::string &doc = "") {
+        if (label.empty() || seen.count(label)) return;
+        seen.insert(label);
+        items.push_back({label, kind, detail, doc});
+    };
+
+    // 1. Built-in keywords, types, and properties
+    static const struct { const char *name; int kind; const char *detail; } builtins[] = {
+        {"_domainDefinition", 7, "Domain Definition"},
+        {"gameDefinition", 7, "Game Definition"},
+        {"domainDeclaration", 7, "Domain Declaration"},
+        {"module", 3, "Module"},
+        {"reaction", 3, "Reactive Function"},
+        {"loop", 3, "Loop Function"},
+        {"state", 22, "State Machine State"},
+        {"transition", 22, "State Machine Transition"},
+        {"platformModule", 7, "Platform Module"},
+        {"platformFunction", 3, "Platform Function"},
+        {"type", 7, "Schema Type Definition"},
+        {"typeProperty", 10, "Schema Property"},
+        {"signal", 6, "Signal Declaration"},
+        {"switch", 6, "Switch / Boolean Signal"},
+        {"trigger", 6, "Trigger / Event Signal"},
+        {"constant", 21, "Constant Declaration"},
+        {"mainInputPort", 8, "Main Input Port"},
+        {"mainOutputPort", 8, "Main Output Port"},
+        {"propertyInputPort", 8, "Property Input Port"},
+        {"propertyOutputPort", 8, "Property Output Port"},
+        {"port", 8, "Port Declaration"},
+        {"alias", 7, "Type / Entity Alias"},
+        {"import", 14, "Import Directive"},
+        {"use", 14, "Use Directive"},
+        {"as", 14, "Namespace Alias Keyword"},
+        {"version", 14, "Version Directive"},
+        {"streamRate", 14, "Stream Rate Directive"},
+        {"in", 14, "Iteration Keyword"},
+        {"on", 14, "Boolean True / Active Literal"},
+        {"off", 14, "Boolean False / Inactive Literal"},
+        {"none", 14, "None Literal"},
+        {"Int", 7, "Signed Integer"},
+        {"UInt", 7, "Unsigned Integer"},
+        {"Real", 7, "Floating Point Number"},
+        {"Size", 7, "Unsigned Integer Size/Count"},
+        {"Int8", 7, "8-bit Signed Integer"},
+        {"Int16", 7, "16-bit Signed Integer"},
+        {"Int32", 7, "32-bit Signed Integer"},
+        {"Int64", 7, "64-bit Signed Integer"},
+        {"UInt8", 7, "8-bit Unsigned Integer"},
+        {"UInt16", 7, "16-bit Unsigned Integer"},
+        {"UInt32", 7, "32-bit Unsigned Integer"},
+        {"UInt64", 7, "64-bit Unsigned Integer"},
+        {"Float32", 7, "32-bit Single Precision Float"},
+        {"Float64", 7, "64-bit Double Precision Float"},
+        {"Switch", 7, "Boolean Switch Type"},
+        {"String", 7, "String Text Type"},
+        {"_NumericTypes", 7, "Type Class: Any Numeric Type"},
+        {"_IntegerTypes", 7, "Type Class: Any Integer Type"},
+        {"_FloatTypes", 7, "Type Class: Any Float Type"},
+        {"_DataTypes", 7, "Type Class: All Data Types"},
+        {"default:", 10, "Property: default initial value"},
+        {"reset:", 10, "Property: reset behaviour"},
+        {"domain:", 10, "Property: domain coordinator"},
+        {"type:", 10, "Property: data or schema type"},
+        {"rate:", 10, "Property: sampling frequency (Hz)"},
+        {"meta:", 10, "Property: documentation description"},
+        {"framework:", 10, "Property: target platform framework"},
+        {"inputs:", 10, "Property: input signal ports"},
+        {"outputs:", 10, "Property: output signal ports"},
+        {"states:", 10, "Property: state machine states"},
+        {"transitions:", 10, "Property: state transitions"},
+        {"guard:", 10, "Property: boolean condition guard"},
+        {"targetState:", 10, "Property: destination state"},
+        {"blocks:", 10, "Property: inner blocks / declarations"},
+        {"ports:", 10, "Property: module ports"}
+    };
+    for (const auto &b : builtins) {
+        addItem(b.name, b.kind, b.detail);
+    }
+
+    // 2. Add library members from g_library
+    auto members = g_library.getLibraryMembers();
+    for (const auto &pair : members) {
+        for (const auto &node : pair.second) {
+            auto decl = std::dynamic_pointer_cast<DeclarationNode>(node);
+            if (decl && !decl->getName().empty()) {
+                std::string meta = extractMetaDoc(decl);
+                int k = 7;
+                std::string ent = decl->getEntityType();
+                if (ent == "module" || ent == "reaction" || ent == "loop") k = 3;
+                else if (ent == "constant") k = 21;
+                else if (ent == "signal" || ent == "switch" || ent == "trigger") k = 6;
+                addItem(decl->getName(), k, ent + " (library: " + pair.first + ")", meta);
+            }
+        }
+    }
+
+    // 3. Add symbols from active document and imported trees
+    auto it = openDocuments.find(uri);
+    if (it != openDocuments.end()) {
+        auto addTreeDecls = [&](ASTNode tree) {
+            if (!tree) return;
+            for (const auto &child : tree->getChildren()) {
+                auto decl = std::dynamic_pointer_cast<DeclarationNode>(child);
+                if (decl && !decl->getName().empty()) {
+                    std::string dName = decl->getName();
+                    if (dName.rfind("___Anonymous___", 0) != 0 && dName.find("Anonymous") == std::string::npos) {
+                        std::string ent = decl->getEntityType();
+                        int k = 6;
+                        if (ent == "module" || ent == "reaction" || ent == "loop") k = 3;
+                        else if (ent == "type" || ent == "_domainDefinition" || ent == "gameDefinition") k = 7;
+                        else if (ent == "constant") k = 21;
+                        addItem(dName, k, ent, extractMetaDoc(decl));
+                    }
+                }
+            }
+        };
+        addTreeDecls(it->second.tree);
+        addTreeDecls(it->second.importedTree);
+    }
 
     std::ostringstream json;
     json << "{\"jsonrpc\":\"2.0\",\"id\":" << id << ",\"result\":{\"isIncomplete\":false,\"items\":[";
-    size_t count = sizeof(keywords) / sizeof(keywords[0]);
-    for (size_t i = 0; i < count; i++) {
+    for (size_t i = 0; i < items.size(); i++) {
         if (i > 0) json << ",";
-        json << "{";
-        json << "\"label\":\"" << keywords[i] << "\",";
-        json << "\"kind\":" << (std::string(keywords[i]).find(':') != std::string::npos ? 10 : 14);
+        const auto &item = items[i];
+        json << "{\"label\":\"" << escapeJson(item.label) << "\",\"kind\":" << item.kind;
+        if (!item.detail.empty()) {
+            json << ",\"detail\":\"" << escapeJson(item.detail) << "\"";
+        }
+        if (!item.doc.empty()) {
+            json << ",\"documentation\":{\"kind\":\"markdown\",\"value\":\"" << escapeJson(item.doc) << "\"}";
+        }
         json << "}";
     }
     json << "]}}";
@@ -1869,8 +2093,26 @@ void handleDefinition(const std::string &id, const std::string &uri, int line, i
             }
 
             if (result == "null") {
+                TokenAtPosition tokenInfo = getTokenAtPosition(it->second.text, line, character);
                 ScopeStack scopeStack = it->second.tree ? buildScopeStackForPosition(it->second.tree, line + 1) : ScopeStack();
-                std::shared_ptr<DeclarationNode> decl = findSymbolOrType(token, scopeStack, it->second.tree, it->second.importedTree);
+                std::shared_ptr<DeclarationNode> decl = nullptr;
+                if (tokenInfo.precededByDot && !tokenInfo.dotTargetEntity.empty()) {
+                    auto entDecl = findSymbolOrType(tokenInfo.dotTargetEntity, scopeStack, it->second.tree, it->second.importedTree);
+                    std::string entType = entDecl ? entDecl->getEntityType() : "";
+                    if (entDecl) {
+                        auto typeVal = entDecl->getPropertyValue("type");
+                        if (typeVal && typeVal->getNodeType() == AST::String) {
+                            entType = std::static_pointer_cast<ValueNode>(typeVal)->getStringValue();
+                        }
+                    }
+                    auto targetType = findSymbolOrType(entType.empty() ? tokenInfo.dotTargetEntity : entType, scopeStack, it->second.tree, it->second.importedTree);
+                    if (targetType) {
+                        decl = findPropertyInDeclaration(targetType, token);
+                    }
+                }
+                if (!decl) {
+                    decl = findSymbolOrType(token, scopeStack, it->second.tree, it->second.importedTree);
+                }
                 if (decl) {
                     int declLine = (decl->getLine() > 0) ? (decl->getLine() - 1) : 0;
                     std::string targetUri = uri;
@@ -2090,7 +2332,10 @@ int main(int argc, char **argv) {
             std::string uri = getJsonStringField(message, "uri");
             handleDocumentSymbols(id, uri);
         } else if (method == "textDocument/completion") {
-            handleCompletion(id);
+            std::string uri = getJsonStringField(message, "uri");
+            int line = getJsonIntField(message, "line");
+            int character = getJsonIntField(message, "character");
+            handleCompletion(id, uri, line, character);
         } else if (method == "textDocument/definition") {
             std::string uri = getJsonStringField(message, "uri");
             int line = getJsonIntField(message, "line");
