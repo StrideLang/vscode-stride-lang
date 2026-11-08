@@ -4,6 +4,11 @@
     "description": "Rich language support and Language Server for Stride, state machines, and game definitions",
     "version": "0.1.0",
     "publisher": "StrideLang",
+    "license": "AGPL-3.0-only",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/StrideLang/vscode-stride-lang.git"
+    },
     "engines": {
         "vscode": "^1.75.0"
     },
@@ -14,7 +19,8 @@
     "scripts": {
         "vscode:prepublish": "npm run compile",
         "compile": "tsc -p ./",
-        "watch": "tsc -watch -p ./"
+        "watch": "tsc -watch -p ./",
+        "package": "vsce package"
     },
     "categories": [
         "Programming Languages",
@@ -72,7 +78,8 @@
                         "variable.other.constant.stride"
                     ],
                     "property": [
-                        "keyword.control.property.stride"
+                        "keyword.control.property.stride",
+                        "variable.other.property.stride"
                     ]
                 }
             }
@@ -227,6 +234,7 @@
     "devDependencies": {
         "@types/node": "^18.19.0",
         "@types/vscode": "^1.75.0",
+        "@vscode/vsce": "^2.24.0",
         "typescript": "^5.3.3"
     }
 }

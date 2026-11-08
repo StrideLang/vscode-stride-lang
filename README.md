@@ -186,4 +186,4 @@ When `stride.stridecPath` or `stride.stridetestPath` is not explicitly set, the 
 
 ## License
 
-BSD-3-Clause
+AGPL-3.0-only (contains code licensed under BSD-3-Clause; see [License.txt](License.txt)).

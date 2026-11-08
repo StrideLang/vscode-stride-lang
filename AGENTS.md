@@ -157,10 +157,13 @@ The output binary is placed in `server/bin/stride-lsp.exe`.
 ### Packaging & Publishing with VSCE
 ```powershell
 # Create .vsix package
-npx vsce package
+npm run package
+# Or directly via vsce
+npx @vscode/vsce package
 
 # Publish to Visual Studio Marketplace
-npx vsce publish -p <PERSONAL_ACCESS_TOKEN>
+npx @vscode/vsce publish -p <PERSONAL_ACCESS_TOKEN>
 ```
 - **Publisher**: `StrideLang`
+- **CI Packaging**: Automated via `.github/workflows/package.yml`. It packages on pushes to main branches, generates downloadable `.vsix` artifacts, and attaches releases when tags (`v*`) are pushed.
 - **PAT Requirements**: Azure DevOps -> Personal Access Token -> All accessible organizations -> Scope: `Marketplace (Acquire, Manage)`.
