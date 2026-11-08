@@ -98,15 +98,57 @@
 			"patterns": [
 				{
 					"name": "constant.numeric.hex.stride",
-					"match": "\\b0x[0-9a-fA-F]+\\b"
+					"match": "\\b(0[xX][0-9a-fA-F](?:_?[0-9a-fA-F])*)([iu](?:8|16|32|64)|u|usize)?\\b",
+					"captures": {
+						"2": {
+							"name": "storage.type.numeric.stride"
+						}
+					}
+				},
+				{
+					"name": "constant.numeric.binary.stride",
+					"match": "\\b(0[bB][01](?:_?[01])*)([iu](?:8|16|32|64)|u|usize)?\\b",
+					"captures": {
+						"2": {
+							"name": "storage.type.numeric.stride"
+						}
+					}
 				},
 				{
 					"name": "constant.numeric.float.stride",
-					"match": "\\b[0-9]+\\.[0-9]*([eE][+-]?[0-9]+)?\\b|\\b\\.[0-9]+([eE][+-]?[0-9]+)?\\b|\\b[0-9]+[eE][+-]?[0-9]+\\b"
+					"match": "\\b([0-9](?:_?[0-9])*\\.(?!\\.)(?:[0-9](?:_?[0-9])*)?(?:[eE][+-]?[0-9](?:_?[0-9])*)?|[0-9](?:_?[0-9])*[eE][+-]?[0-9](?:_?[0-9])*)(f(?:32|64))?\\b",
+					"captures": {
+						"2": {
+							"name": "storage.type.numeric.stride"
+						}
+					}
+				},
+				{
+					"name": "constant.numeric.float.stride",
+					"match": "(?<![0-9a-zA-Z_])(\\.[0-9](?:_?[0-9])*(?:[eE][+-]?[0-9](?:_?[0-9])*)?)(f(?:32|64))?\\b",
+					"captures": {
+						"2": {
+							"name": "storage.type.numeric.stride"
+						}
+					}
+				},
+				{
+					"name": "constant.numeric.float.stride",
+					"match": "\\b([0-9](?:_?[0-9])*)(f(?:32|64))\\b",
+					"captures": {
+						"2": {
+							"name": "storage.type.numeric.stride"
+						}
+					}
 				},
 				{
 					"name": "constant.numeric.integer.stride",
-					"match": "\\b[0-9]+\\b"
+					"match": "\\b([0-9](?:_?[0-9])*)([iu](?:8|16|32|64)|u|usize)?\\b",
+					"captures": {
+						"2": {
+							"name": "storage.type.numeric.stride"
+						}
+					}
 				}
 			]
 		},

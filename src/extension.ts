@@ -341,6 +341,163 @@ function getLiteralConversionRisk(literalVal: string, toType: string): string | 
     return null;
 }
 
+export const SUFFIX_TO_TYPE: Record<string, string> = {
+    'i8': 'Int8',
+    'i16': 'Int16',
+    'i32': 'Int32',
+    'i64': 'Int64',
+    'u8': 'UInt8',
+    'u16': 'UInt16',
+    'u32': 'UInt32',
+    'u64': 'UInt64',
+    'u': 'UInt',
+    'usize': 'Size',
+    'f32': 'Float32',
+    'f64': 'Float64'
+};
+
+export interface ParsedNumericLiteral {
+    isValid: boolean;
+    type: string;
+    value?: number | bigint;
+    suffix?: string;
+    isFloat: boolean;
+    error?: string;
+}
+
+export function checkIntegerRange(val: bigint, suffix: string | undefined, typeName: string): string | null {
+    if (!suffix) return null;
+    if (suffix === 'u8') {
+        if (val < 0n || val > 255n) return `The value does not fit in ${typeName}.`;
+    } else if (suffix === 'i8') {
+        if (val < -128n || val > 127n) return `The value does not fit in ${typeName}.`;
+    } else if (suffix === 'u16') {
+        if (val < 0n || val > 65535n) return `The value does not fit in ${typeName}.`;
+    } else if (suffix === 'i16') {
+        if (val < -32768n || val > 32767n) return `The value does not fit in ${typeName}.`;
+    } else if (suffix === 'u32') {
+        if (val < 0n || val > 4294967295n) return `The value does not fit in ${typeName}.`;
+    } else if (suffix === 'i32') {
+        if (val < -2147483648n || val > 2147483647n) return `The value does not fit in ${typeName}.`;
+    } else if (suffix === 'u64') {
+        if (val < 0n || val > 18446744073709551615n) return "The value does not fit in 64 bits.";
+    } else if (suffix === 'i64') {
+        if (val < -9223372036854775808n || val > 9223372036854775807n) {
+            if (val > 18446744073709551615n || val < -18446744073709551615n) {
+                return "The value does not fit in 64 bits.";
+            }
+            return `The value does not fit in ${typeName}.`;
+        }
+    }
+    return null;
+}
+
+export function parseNumericLiteral(text: string): ParsedNumericLiteral | undefined {
+    const trimmed = text.trim();
+    if (!trimmed) return undefined;
+
+    const signMatch = /^[+-]/.exec(trimmed);
+    const sign = signMatch ? signMatch[0] : '';
+    const body = sign ? trimmed.slice(1) : trimmed;
+
+    // Check hex literal: 0[xX][0-9a-fA-F](_?[0-9a-fA-F])*([iu](8|16|32|64)|u|usize)?
+    const hexMatch = /^0[xX]([0-9a-fA-F](?:_?[0-9a-fA-F])*)([iu](?:8|16|32|64)|u|usize)?$/.exec(body);
+    if (hexMatch) {
+        const rawDigits = hexMatch[1].replace(/_/g, '');
+        const suffix = hexMatch[2];
+        const type = suffix ? (SUFFIX_TO_TYPE[suffix] || 'Int') : 'Int';
+        if (suffix && (suffix[0] === 'u' || suffix === 'usize') && sign === '-') {
+            return { isValid: false, type, suffix, isFloat: false, error: "Unsigned literals can't be negative." };
+        }
+        try {
+            const val = BigInt('0x' + rawDigits);
+            const numVal = sign === '-' ? -val : val;
+            const rangeErr = checkIntegerRange(numVal, suffix, type);
+            if (rangeErr) {
+                return { isValid: false, type, value: numVal, suffix, isFloat: false, error: rangeErr };
+            }
+            return { isValid: true, type, value: numVal, suffix, isFloat: false };
+        } catch {
+            return { isValid: false, type, suffix, isFloat: false, error: "The value does not fit in 64 bits." };
+        }
+    }
+
+    // Check binary literal: 0[bB][01](_?[01])*([iu](8|16|32|64)|u|usize)?
+    const binMatch = /^0[bB]([01](?:_?[01])*)([iu](?:8|16|32|64)|u|usize)?$/.exec(body);
+    if (binMatch) {
+        const rawDigits = binMatch[1].replace(/_/g, '');
+        const suffix = binMatch[2];
+        const type = suffix ? (SUFFIX_TO_TYPE[suffix] || 'Int') : 'Int';
+        if (suffix && (suffix[0] === 'u' || suffix === 'usize') && sign === '-') {
+            return { isValid: false, type, suffix, isFloat: false, error: "Unsigned literals can't be negative." };
+        }
+        try {
+            const val = BigInt('0b' + rawDigits);
+            const numVal = sign === '-' ? -val : val;
+            const rangeErr = checkIntegerRange(numVal, suffix, type);
+            if (rangeErr) {
+                return { isValid: false, type, value: numVal, suffix, isFloat: false, error: rangeErr };
+            }
+            return { isValid: true, type, value: numVal, suffix, isFloat: false };
+        } catch {
+            return { isValid: false, type, suffix, isFloat: false, error: "The value does not fit in 64 bits." };
+        }
+    }
+
+    // Check real with integer suffix error: e.g. 1.5i32, 0.5u8
+    if (/^[0-9](?:_?[0-9])*\.[0-9]*(?:_?[0-9])*(?:[iu](?:8|16|32|64)|u|usize)$/.test(body) ||
+        /^\.[0-9](?:_?[0-9])*(?:[iu](?:8|16|32|64)|u|usize)$/.test(body)) {
+        return { isValid: false, type: 'Real', isFloat: true, error: "Integer suffixes do not apply to reals." };
+    }
+
+    // Check float literal with suffix: e.g. 0.5f32, .5f32, 1e-3f32, 2f64, 1_000f32
+    const floatSuffixedMatch = /^(?:[0-9](?:_?[0-9])*\.(?:[0-9](?:_?[0-9])*)?(?:[eE][+-]?[0-9](?:_?[0-9])*)?|\.[0-9](?:_?[0-9])*(?:[eE][+-]?[0-9](?:_?[0-9])*)?|[0-9](?:_?[0-9])*[eE][+-]?[0-9](?:_?[0-9])*|[0-9](?:_?[0-9])*)(f(?:32|64))$/.exec(body);
+    if (floatSuffixedMatch) {
+        const suffix = floatSuffixedMatch[1];
+        const type = SUFFIX_TO_TYPE[suffix] || 'Float32';
+        const numStr = (sign + body.slice(0, -suffix.length)).replace(/_/g, '');
+        const val = parseFloat(numStr);
+        return { isValid: true, type, value: val, suffix, isFloat: true };
+    }
+
+    // Check float literal without suffix: e.g. 0.5, 1_000.5, .5, 1e-3, 2.5e6
+    if (/^(?:[0-9](?:_?[0-9])*\.(?:[0-9](?:_?[0-9])*)?(?:[eE][+-]?[0-9](?:_?[0-9])*)?|\.[0-9](?:_?[0-9])*(?:[eE][+-]?[0-9](?:_?[0-9])*)?|[0-9](?:_?[0-9])*[eE][+-]?[0-9](?:_?[0-9])*)$/.test(body)) {
+        const val = parseFloat((sign + body).replace(/_/g, ''));
+        return { isValid: true, type: 'Real', value: val, isFloat: true };
+    }
+
+    // Check decimal integer with optional int suffix: e.g. 255u8, -128i8, 42u, 7usize, 1_000, 44100
+    const intMatch = /^[0-9](?:_?[0-9])*([iu](?:8|16|32|64)|u|usize)?$/.exec(body);
+    if (intMatch) {
+        const suffix = intMatch[1];
+        const type = suffix ? (SUFFIX_TO_TYPE[suffix] || 'Int') : 'Int';
+        if (suffix && (suffix[0] === 'u' || suffix === 'usize') && sign === '-') {
+            return { isValid: false, type, suffix, isFloat: false, error: "Unsigned literals can't be negative." };
+        }
+        const rawDigits = body.slice(0, suffix ? -suffix.length : undefined).replace(/_/g, '');
+        try {
+            const val = BigInt(rawDigits);
+            const numVal = sign === '-' ? -val : val;
+            const rangeErr = checkIntegerRange(numVal, suffix, type);
+            if (rangeErr) {
+                return { isValid: false, type, value: numVal, suffix, isFloat: false, error: rangeErr };
+            }
+            return { isValid: true, type, value: numVal, suffix, isFloat: false };
+        } catch {
+            return { isValid: false, type, suffix, isFloat: false, error: "The value does not fit in 64 bits." };
+        }
+    }
+
+    // Check unknown type suffix like 1u12
+    const unknownSuffixMatch = /^[0-9](?:_?[0-9])*([a-zA-Z0-9]+)$/.exec(body);
+    if (unknownSuffixMatch) {
+        const badSuffix = unknownSuffixMatch[1];
+        return { isValid: false, type: 'Int', suffix: badSuffix, isFloat: false, error: `Unknown type suffix '${badSuffix}'.` };
+    }
+
+    return undefined;
+}
+
 function maskCommentsAndStrings(text: string): string {
     const chars = text.split('');
     let inString: false | '"' | "'" = false;
@@ -2677,6 +2834,30 @@ function registerFallbackProviders(context: ExtensionContext) {
                 return undefined;
             }
 
+            // Check numeric literal hover (including floats like 0.5f32, .5f32, hex 0x1Fu8, binary 0b1010u8)
+            const numWordRange = document.getWordRangeAtPosition(
+                position,
+                /(?:0[xX][0-9a-fA-F](?:_?[0-9a-fA-F])*(?:[iu](?:8|16|32|64)|u|usize)?|0[bB][01](?:_?[01])*(?:[iu](?:8|16|32|64)|u|usize)?|[0-9](?:_?[0-9])*\.(?!\.)[0-9]*(?:_?[0-9])*(?:[eE][+-]?[0-9](?:_?[0-9])*)?(?:f(?:32|64))?|(?<![0-9a-zA-Z_])\.[0-9](?:_?[0-9])*(?:[eE][+-]?[0-9](?:_?[0-9])*)?(?:f(?:32|64))?|[0-9](?:_?[0-9])*[eE][+-]?[0-9](?:_?[0-9])*(?:f(?:32|64))?|[0-9](?:_?[0-9])*(?:[iu](?:8|16|32|64)|u|usize|f(?:32|64))|[0-9](?:_?[0-9])*)/
+            );
+            if (numWordRange) {
+                const numText = document.getText(numWordRange);
+                const parsedNum = parseNumericLiteral(numText);
+                if (parsedNum) {
+                    let header = `literal ${numText}: ${parsedNum.type}`;
+                    let body = `**Numeric Literal**: \`${numText}\`\n\n- **Data Type**: \`${parsedNum.type}\`\n`;
+                    if (parsedNum.value !== undefined) {
+                        body += `- **Value**: \`${parsedNum.value.toString()}\`\n`;
+                    }
+                    if (parsedNum.suffix) {
+                        body += `- **Suffix**: \`${parsedNum.suffix}\` (explicit \`${parsedNum.type}\` type suffix)\n`;
+                    }
+                    if (parsedNum.error) {
+                        body += `\n⚠️ *Literal Error: ${parsedNum.error}*\n`;
+                    }
+                    return createCompactHover(header, body);
+                }
+            }
+
             const wordRange = document.getWordRangeAtPosition(position, /[_@a-zA-Z0-9]+/);
             if (!wordRange) return undefined;
             const word = document.getText(wordRange);
@@ -3171,8 +3352,8 @@ function registerFallbackProviders(context: ExtensionContext) {
                     const charIndex = match.index;
                     const tokenLen = token.length;
 
-                    // Skip numbers
-                    if (/^\d+$/.test(token)) {
+                    // Skip numbers (integers, floats, hex, binary, with underscores or suffixes)
+                    if (/^\d/.test(token) || parseNumericLiteral(token) !== undefined) {
                         continue;
                     }
 
@@ -3188,6 +3369,10 @@ function registerFallbackProviders(context: ExtensionContext) {
 
                     // Check if preceded by dot (member access / entity property: Entity.member or .member)
                     const beforeToken = lineText.substring(0, charIndex);
+                    // In a float literal like 0.5f32 or .5f32, do not treat fractional digits as a property
+                    if (/\d\s*\.\s*$/.test(beforeToken) || (/\.\s*$/.test(beforeToken) && !/([_a-zA-Z0-9])\s*\.\s*$/.test(beforeToken))) {
+                        continue;
+                    }
                     const isPrecededByDot = /\.\s*$/.test(beforeToken);
                     if (isPrecededByDot) {
                         builder.push(lineIndex, charIndex, tokenLen, 4, 0); // tokenType 4 = 'property'
@@ -3667,11 +3852,33 @@ function registerFallbackProviders(context: ExtensionContext) {
                     }
                 }
 
+                // Validate Numeric Literals in Streams (fit within range, valid suffixes, no negative unsigned)
+                const numLitPattern = /(?:(?<=[\s,(\[\-+*\/><=]|^)[+-])?(?:0[xX][0-9a-fA-F](?:_?[0-9a-fA-F])*[a-zA-Z0-9]*|0[bB][01](?:_?[01])*[a-zA-Z0-9]*|[0-9](?:_?[0-9])*\.(?!\.)[0-9]*(?:_?[0-9])*(?:[eE][+-]?[0-9](?:_?[0-9])*)?[a-zA-Z0-9]*|(?<![0-9a-zA-Z_])\.[0-9](?:_?[0-9])*(?:[eE][+-]?[0-9](?:_?[0-9])*)?[a-zA-Z0-9]*|[0-9](?:_?[0-9])*[eE][+-]?[0-9](?:_?[0-9])*[a-zA-Z0-9]*|[0-9](?:_?[0-9])*[a-zA-Z0-9]+|[0-9](?:_?[0-9])*)/g;
+                let numMatch;
+                while ((numMatch = numLitPattern.exec(stmtText)) !== null) {
+                    const litStr = numMatch[0];
+                    if (!litStr || litStr === '+' || litStr === '-') continue;
+                    const afterLit = stmtText.slice(numMatch.index + litStr.length);
+                    if (/^\.\./.test(afterLit)) continue;
+
+                    const parsed = parseNumericLiteral(litStr);
+                    if (parsed && parsed.error) {
+                        const globalCharIndex = sStart + 1 + stmtMatch.index + numMatch.index;
+                        const startPos = document.positionAt(globalCharIndex);
+                        const endPos = document.positionAt(globalCharIndex + litStr.length);
+                        diagnostics.push(new Diagnostic(
+                            new Range(startPos, endPos),
+                            parsed.error,
+                            DiagnosticSeverity.Error
+                        ));
+                    }
+                }
+
                 const tokenRegex = /\b([_a-zA-Z0-9]+)\b/g;
                 let tokMatch;
                 while ((tokMatch = tokenRegex.exec(stmtText)) !== null) {
                     const tok = tokMatch[1];
-                    if (/^\d+$/.test(tok) || tok === 'on' || tok === 'off' || tok === 'none' || tok === 'true' || tok === 'false') continue;
+                    if (/^\d/.test(tok) || parseNumericLiteral(tok) !== undefined || tok === 'on' || tok === 'off' || tok === 'none' || tok === 'true' || tok === 'false') continue;
                     if (tok === 'llvm' || tok === 'icmp' || tok === 'fcmp' || tok === 'eq' || tok === 'ne' || tok === 'sgt' || tok === 'sge' || tok === 'slt' || tok === 'sle') continue;
 
                     // If token is immediately followed by a colon (e.g. `entityType:`, `targetSupply:`, `count:`),
@@ -3705,11 +3912,9 @@ function registerFallbackProviders(context: ExtensionContext) {
                 if (stages.length >= 2) {
                     const resolveOperandType = (operand: string): { type?: string; isLiteral?: boolean; literalVal?: string } => {
                         const trimmed = operand.trim();
-                        if (/^[+-]?\d+\.\d+$/.test(trimmed)) {
-                            return { type: 'Real', isLiteral: true, literalVal: trimmed };
-                        }
-                        if (/^[+-]?\d+$/.test(trimmed)) {
-                            return { type: 'Int', isLiteral: true, literalVal: trimmed };
+                        const parsedLit = parseNumericLiteral(trimmed);
+                        if (parsedLit && parsedLit.isValid) {
+                            return { type: parsedLit.type, isLiteral: true, literalVal: trimmed };
                         }
                         if (trimmed === 'on' || trimmed === 'off') {
                             return { type: 'Switch', isLiteral: true, literalVal: trimmed };
