@@ -634,6 +634,20 @@ void analyzeDocument(DocumentState &doc) {
         }
         for (const auto &docChild : doc.tree->getChildren()) {
             combinedTree->addChild(docChild);
+            auto decl = std::dynamic_pointer_cast<DeclarationNode>(docChild);
+            if (decl) {
+                std::string ent = decl->getEntityType();
+                if (ent == "_domainDefinition" || ent == "gameDefinition" || ent == "domainDeclaration" || ent == "_domainDeclaration" || ent == "domainDefinition") {
+                    for (const std::string &propName : {"inputs", "outputs"}) {
+                        auto propVal = decl->getPropertyValue(propName);
+                        if (propVal) {
+                            for (const auto &c : propVal->getChildren()) {
+                                combinedTree->addChild(c);
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // 1. Validate AST types using ASTValidation from strideutils
@@ -778,6 +792,30 @@ std::shared_ptr<DeclarationNode> findSymbolOrType(const std::string &token, cons
     if (docTree) {
         decl = ASTQuery::findDeclarationByName(token, scopeStack, docTree);
         if (!decl) decl = ASTQuery::findTypeDeclarationByName(token, scopeStack, docTree);
+        if (!decl) {
+            for (const auto &child : docTree->getChildren()) {
+                auto d = std::dynamic_pointer_cast<DeclarationNode>(child);
+                if (d) {
+                    std::string ent = d->getEntityType();
+                    if (ent == "_domainDefinition" || ent == "gameDefinition" || ent == "domainDeclaration" || ent == "_domainDeclaration" || ent == "domainDefinition") {
+                        for (const std::string &p : {"inputs", "outputs"}) {
+                            auto pVal = d->getPropertyValue(p);
+                            if (pVal) {
+                                for (const auto &c : pVal->getChildren()) {
+                                    auto cDecl = std::dynamic_pointer_cast<DeclarationNode>(c);
+                                    if (cDecl && cDecl->getName() == token) {
+                                        decl = cDecl;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (decl) break;
+                        }
+                    }
+                }
+                if (decl) break;
+            }
+        }
     }
     if (!decl && importedTree) {
         decl = ASTQuery::findDeclarationByName(token, {}, importedTree);
@@ -2008,13 +2046,26 @@ void handleCompletion(const std::string &id, const std::string &uri = "", int li
                 auto decl = std::dynamic_pointer_cast<DeclarationNode>(child);
                 if (decl && !decl->getName().empty()) {
                     std::string dName = decl->getName();
+                    std::string ent = decl->getEntityType();
                     if (dName.rfind("___Anonymous___", 0) != 0 && dName.find("Anonymous") == std::string::npos) {
-                        std::string ent = decl->getEntityType();
                         int k = 6;
                         if (ent == "module" || ent == "reaction" || ent == "loop") k = 3;
                         else if (ent == "type" || ent == "_domainDefinition" || ent == "gameDefinition") k = 7;
                         else if (ent == "constant") k = 21;
                         addItem(dName, k, ent, extractMetaDoc(decl));
+                    }
+                    if (ent == "_domainDefinition" || ent == "gameDefinition" || ent == "domainDeclaration" || ent == "_domainDeclaration" || ent == "domainDefinition") {
+                        for (const std::string &propName : {"inputs", "outputs"}) {
+                            auto propVal = decl->getPropertyValue(propName);
+                            if (propVal) {
+                                for (const auto &c : propVal->getChildren()) {
+                                    auto cDecl = std::dynamic_pointer_cast<DeclarationNode>(c);
+                                    if (cDecl && !cDecl->getName().empty()) {
+                                        addItem(cDecl->getName(), 6, cDecl->getEntityType() + " (" + dName + " " + propName + ")", extractMetaDoc(cDecl));
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }

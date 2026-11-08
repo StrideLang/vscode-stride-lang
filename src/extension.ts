@@ -767,6 +767,7 @@ interface ScopeDeclaration {
     generatorVar?: string;
     generatorRange?: string;
     isAnonymous?: boolean;
+    fromDomain?: string;
 }
 
 interface ScopeContext {
@@ -1409,6 +1410,35 @@ function parseScopeTree(text: string, filePath: string, preMaskedText?: string):
         }
     }
 
+    // Add inputs and outputs from domain definitions to the enclosing parent scope (e.g. rootScope)
+    const isDomainDef = (k: string) =>
+        k === '_domainDefinition' || k === 'domainDefinition' ||
+        k === '_domainDeclaration' || k === 'domainDeclaration' ||
+        k === 'gameDefinition';
+
+    for (const scope of discoveredScopes) {
+        if (isDomainDef(scope.kind) && scope.parent) {
+            for (const [dName, decl] of scope.declarations.entries()) {
+                if (!scope.parent.declarations.has(dName)) {
+                    scope.parent.declarations.set(dName, {
+                        ...decl,
+                        fromDomain: scope.name
+                    });
+                }
+            }
+            for (const [pName, port] of scope.ports.entries()) {
+                if (!scope.parent.ports.has(pName)) {
+                    scope.parent.ports.set(pName, port);
+                }
+            }
+            for (const [bName, port] of scope.boundPorts.entries()) {
+                if (!scope.parent.boundPorts.has(bName)) {
+                    scope.parent.boundPorts.set(bName, port);
+                }
+            }
+        }
+    }
+
     rootScope.enclosingDecls = enclosingDecls;
     return rootScope;
 }
@@ -1750,6 +1780,27 @@ function parseLibrarySymbols(text: string, filePath: string, preMaskedText?: str
                     generatorVar,
                     generatorRange
                 });
+
+                const isDomain = kind === '_domainDefinition' || kind === 'domainDefinition' ||
+                                 kind === '_domainDeclaration' || kind === 'domainDeclaration' ||
+                                 kind === 'gameDefinition';
+                if (isDomain) {
+                    const domainDecls = parseDeclarationsFromBlock(body, line, filePath);
+                    for (const d of domainDecls) {
+                        if (!symbols.some(s => s.name === d.name)) {
+                            symbols.push({
+                                name: d.name,
+                                kind: d.kind,
+                                filePath,
+                                line: d.line,
+                                signature: d.signature,
+                                meta: d.meta,
+                                arraySpec: d.arraySpec
+                            });
+                        }
+                    }
+                }
+
                 wordRegex.lastIndex = headerEnd;
                 continue;
             }
@@ -2741,6 +2792,7 @@ function registerFallbackProviders(context: ExtensionContext) {
 
                 // 1. Declarations directly inside this scope (that are not separate child scopes)
                 for (const [_, decl] of scope.declarations.entries()) {
+                    if (decl.fromDomain) continue;
                     const isChildScope = scope.children.some(c => c.name === decl.name && c.startLine === decl.line);
                     if (!isChildScope) {
                         const dLine = Math.max(0, decl.line - 1);
@@ -3782,7 +3834,214 @@ function registerFallbackProviders(context: ExtensionContext) {
         }
         checkDuplicateScope(rootScope);
 
-        // 4. Validate Undeclared Symbols in Streams (ignoring string literals and comments)
+        // 4. Validate Undeclared Symbols and Lossy Conversions in Streams (ignoring string literals and comments)
+        const validateStreamStatement = (stmtText: string, stmtGlobalIndex: number, stmtLine: number, stmtLength: number) => {
+            const scopeStack = buildScopeStack(rootScope, stmtLine);
+
+            // Validate Member Accesses: existence, public (for reads), writeable (for writes)
+            const memberAccessRegex = /\b([_a-zA-Z0-9]+)\.([_a-zA-Z0-9]+)\b/g;
+            let maMatch;
+            while ((maMatch = memberAccessRegex.exec(stmtText)) !== null) {
+                const entName = maMatch[1];
+                const propName = maMatch[2];
+                const decl = findDeclarationInScopeStack(entName, scopeStack);
+                const sym = getAllLibrarySymbols(document).get(entName);
+                const typeName = decl?.type || decl?.kind || sym?.kind;
+                if (!typeName) continue;
+
+                const allProps = resolveAllPropertiesForType(typeName, allTypes);
+                const maIndex = stmtGlobalIndex + maMatch.index;
+                const pStart = document.positionAt(maIndex + entName.length + 1);
+                const pEnd = document.positionAt(maIndex + maMatch[0].length);
+
+                if (allProps.size > 0 && !allProps.has(propName)) {
+                    diagnostics.push(new Diagnostic(
+                        new Range(pStart, pEnd),
+                        `Invalid Property Error: Property '${propName}' is not defined for type '${typeName}'.`,
+                        DiagnosticSeverity.Error
+                    ));
+                    continue;
+                }
+
+                const propInfo = allProps.get(propName);
+                if (propInfo) {
+                    const textBeforeMa = stmtText.slice(0, maMatch.index);
+                    const isDest = textBeforeMa.includes('>>');
+
+                    if (isDest) {
+                        if (propInfo.writeable === false) {
+                            diagnostics.push(new Diagnostic(
+                                new Range(pStart, pEnd),
+                                `ReadOnly Property Error: Port '${propName}' of type '${typeName}' is read only (writeable: off).`,
+                                DiagnosticSeverity.Error
+                            ));
+                        }
+                    } else {
+                        if (propInfo.public === false) {
+                            diagnostics.push(new Diagnostic(
+                                new Range(pStart, pEnd),
+                                `Private Property Error: Port '${propName}' of type '${typeName}' is private (public: off) and cannot be accessed externally.`,
+                                DiagnosticSeverity.Error
+                            ));
+                        }
+                    }
+                }
+            }
+
+            // Validate Numeric Literals in Streams (fit within range, valid suffixes, no negative unsigned)
+            const numLitPattern = /(?:(?<=[\s,(\[\-+*\/><=]|^)[+-])?(?:0[xX][0-9a-fA-F](?:_?[0-9a-fA-F])*[a-zA-Z0-9]*|0[bB][01](?:_?[01])*[a-zA-Z0-9]*|[0-9](?:_?[0-9])*\.(?!\.)[0-9]*(?:_?[0-9])*(?:[eE][+-]?[0-9](?:_?[0-9])*)?[a-zA-Z0-9]*|(?<![0-9a-zA-Z_])\.[0-9](?:_?[0-9])*(?:[eE][+-]?[0-9](?:_?[0-9])*)?[a-zA-Z0-9]*|[0-9](?:_?[0-9])*[eE][+-]?[0-9](?:_?[0-9])*[a-zA-Z0-9]*|[0-9](?:_?[0-9])*[a-zA-Z0-9]+|[0-9](?:_?[0-9])*)/g;
+            let numMatch;
+            while ((numMatch = numLitPattern.exec(stmtText)) !== null) {
+                const litStr = numMatch[0];
+                if (!litStr || litStr === '+' || litStr === '-') continue;
+                const afterLit = stmtText.slice(numMatch.index + litStr.length);
+                if (/^\.\./.test(afterLit)) continue;
+
+                const parsed = parseNumericLiteral(litStr);
+                if (parsed && parsed.error) {
+                    const globalCharIndex = stmtGlobalIndex + numMatch.index;
+                    const startPos = document.positionAt(globalCharIndex);
+                    const endPos = document.positionAt(globalCharIndex + litStr.length);
+                    diagnostics.push(new Diagnostic(
+                        new Range(startPos, endPos),
+                        parsed.error,
+                        DiagnosticSeverity.Error
+                    ));
+                }
+            }
+
+            const tokenRegex = /\b([_a-zA-Z0-9]+)\b/g;
+            let tokMatch;
+            while ((tokMatch = tokenRegex.exec(stmtText)) !== null) {
+                const tok = tokMatch[1];
+                if (/^\d/.test(tok) || parseNumericLiteral(tok) !== undefined || tok === 'on' || tok === 'off' || tok === 'none' || tok === 'true' || tok === 'false') continue;
+                if (tok === 'llvm' || tok === 'icmp' || tok === 'fcmp' || tok === 'eq' || tok === 'ne' || tok === 'sgt' || tok === 'sge' || tok === 'slt' || tok === 'sle') continue;
+
+                // If token is immediately followed by a colon (e.g. `entityType:`, `targetSupply:`, `count:`),
+                // it is a named parameter / port key in a function or reaction invocation, not an undeclared symbol.
+                const afterTok = stmtText.slice(tokMatch.index + tok.length);
+                if (/^\s*:/.test(afterTok)) continue;
+
+                // If token is preceded by a dot (e.g. `ValidInst.publicReadOnly`, `.publicReadOnly`),
+                // it is a member access / entity property, not an undeclared symbol.
+                const beforeTok = stmtText.slice(0, tokMatch.index);
+                if (/\.\s*$/.test(beforeTok)) continue;
+
+                const decl = findDeclarationInScopeStack(tok, scopeStack);
+                const isLibSym = getAllLibrarySymbols(document).has(tok);
+                const isTypeSym = allTypes.has(tok) || BUILTIN_SCALARS[tok];
+
+                if (!decl && !isLibSym && !isTypeSym) {
+                    const globalCharIndex = stmtGlobalIndex + tokMatch.index;
+                    const startPos = document.positionAt(globalCharIndex);
+                    const endPos = document.positionAt(globalCharIndex + tok.length);
+                    diagnostics.push(new Diagnostic(
+                        new Range(startPos, endPos),
+                        `Undeclared Symbol '${tok}'`,
+                        DiagnosticSeverity.Error
+                    ));
+                }
+            }
+
+            // Validate Lossy Conversions in Streams (Warning severity with squiggly lines)
+            const stages = stmtText.split(/\s*>>\s*/);
+            if (stages.length >= 2) {
+                const resolveOperandType = (operand: string): { type?: string; isLiteral?: boolean; literalVal?: string } => {
+                    const trimmed = operand.trim();
+                    const parsedLit = parseNumericLiteral(trimmed);
+                    if (parsedLit && parsedLit.isValid) {
+                        return { type: parsedLit.type, isLiteral: true, literalVal: trimmed };
+                    }
+                    if (trimmed === 'on' || trimmed === 'off') {
+                        return { type: 'Switch', isLiteral: true, literalVal: trimmed };
+                    }
+                    const memberMatch = /^([_a-zA-Z0-9]+)\.([_a-zA-Z0-9]+)$/.exec(trimmed);
+                    if (memberMatch) {
+                        const entName = memberMatch[1];
+                        const propName = memberMatch[2];
+                        const decl = findDeclarationInScopeStack(entName, scopeStack);
+                        if (decl && (decl.type || decl.kind)) {
+                            const tName = decl.type || decl.kind;
+                            const tInfo = allTypes.get(tName) || allTypes.get(TYPE_ALIASES[tName] || tName);
+                            if (tInfo && tInfo.properties) {
+                                const pInfo = tInfo.properties.find(p => p.name === propName);
+                                if (pInfo && pInfo.types && pInfo.types.length > 0) {
+                                    return { type: pInfo.types[0] };
+                                }
+                            }
+                        }
+                        return { type: 'Real' };
+                    }
+                    const idMatch = /^([_a-zA-Z0-9]+)/.exec(trimmed);
+                    if (idMatch) {
+                        const symName = idMatch[1];
+                        const decl = findDeclarationInScopeStack(symName, scopeStack);
+                        if (decl) {
+                            return { type: decl.type || 'Real' };
+                        }
+                    }
+                    const binMatch = /(.+?)\s*([\+\-\*\/])\s*(.+)/.exec(trimmed);
+                    if (binMatch) {
+                        const left = resolveOperandType(binMatch[1]);
+                        const right = resolveOperandType(binMatch[3]);
+                        if (left.type && right.type) {
+                            const leftInfo = DATA_TYPE_MAP[left.type];
+                            const rightInfo = DATA_TYPE_MAP[right.type];
+                            if (leftInfo && rightInfo) {
+                                if (leftInfo.kind === 'float' || rightInfo.kind === 'float') {
+                                    const promoted = (leftInfo.bits || 64) >= (rightInfo.bits || 64) ? (leftInfo.kind === 'float' ? left.type : right.type) : right.type;
+                                    return { type: promoted };
+                                }
+                                const s1 = leftInfo.signed ?? true;
+                                const s2 = rightInfo.signed ?? true;
+                                const b1 = leftInfo.bits || 32;
+                                const b2 = rightInfo.bits || 32;
+                                if (s1 === s2) {
+                                    return { type: b1 >= b2 ? left.type : right.type };
+                                }
+                                const signedBits = s1 ? b1 : b2;
+                                const unsignedBits = s1 ? b2 : b1;
+                                if (signedBits > unsignedBits) {
+                                    return { type: s1 ? left.type : right.type };
+                                }
+                                const neededBits = unsignedBits * 2;
+                                if (neededBits <= 16) return { type: 'Int16' };
+                                if (neededBits <= 32) return { type: 'Int32' };
+                                return { type: 'Int64' };
+                            }
+                        }
+                    }
+                    return {};
+                };
+
+                for (let stageIdx = 0; stageIdx < stages.length - 1; stageIdx++) {
+                    const srcStr = stages[stageIdx];
+                    const dstStr = stages[stageIdx + 1];
+                    const srcInfo = resolveOperandType(srcStr);
+                    const dstInfo = resolveOperandType(dstStr);
+
+                    if (dstInfo.type) {
+                        let riskMsg: string | null = null;
+                        if (srcInfo.isLiteral && srcInfo.literalVal !== undefined) {
+                            riskMsg = getLiteralConversionRisk(srcInfo.literalVal, dstInfo.type);
+                        } else if (srcInfo.type) {
+                            riskMsg = getConversionRisk(srcInfo.type, dstInfo.type);
+                        }
+
+                        if (riskMsg) {
+                            const startPos = document.positionAt(stmtGlobalIndex);
+                            const endPos = document.positionAt(stmtGlobalIndex + stmtLength);
+                            diagnostics.push(new Diagnostic(
+                                new Range(startPos, endPos),
+                                `Warning: Conversion from '${srcInfo.type || 'literal'}' to '${dstInfo.type}' ${riskMsg}`,
+                                DiagnosticSeverity.Warning
+                            ));
+                        }
+                    }
+                }
+            }
+        };
+
         const streamBlockRegex = /\b(?:streams|onTransition|code)\s*:\s*\[/g;
         let sMatch;
         while ((sMatch = streamBlockRegex.exec(maskedText)) !== null) {
@@ -3790,7 +4049,6 @@ function registerFallbackProviders(context: ExtensionContext) {
             const sBlock = extractSquareBracketBlock(text, sStart, maskedText);
             if (!sBlock) continue;
             const sLine = getLineNumber(text, sMatch.index);
-            const scopeStack = buildScopeStack(rootScope, sLine);
             let maskedStreamBody = sBlock.maskedBody;
             if (sMatch[0].startsWith('code')) {
                 // Mask out declaration blocks inside code: [ ... ] so only stream statements are checked
@@ -3802,208 +4060,43 @@ function registerFallbackProviders(context: ExtensionContext) {
             let stmtMatch;
             while ((stmtMatch = streamStmtRegex.exec(maskedStreamBody)) !== null) {
                 const stmtText = stmtMatch[1];
-                // Validate Member Accesses: existence, public (for reads), writeable (for writes)
-                const memberAccessRegex = /\b([_a-zA-Z0-9]+)\.([_a-zA-Z0-9]+)\b/g;
-                let maMatch;
-                while ((maMatch = memberAccessRegex.exec(stmtText)) !== null) {
-                    const entName = maMatch[1];
-                    const propName = maMatch[2];
-                    const decl = findDeclarationInScopeStack(entName, scopeStack);
-                    const sym = getAllLibrarySymbols(document).get(entName);
-                    const typeName = decl?.type || decl?.kind || sym?.kind;
-                    if (!typeName) continue;
+                validateStreamStatement(stmtText, sStart + 1 + stmtMatch.index, sLine, stmtMatch[0].length);
+            }
+        }
 
-                    const allProps = resolveAllPropertiesForType(typeName, allTypes);
-                    const maIndex = sStart + 1 + stmtMatch.index + maMatch.index;
-                    const pStart = document.positionAt(maIndex + entName.length + 1);
-                    const pEnd = document.positionAt(maIndex + maMatch[0].length);
-
-                    if (allProps.size > 0 && !allProps.has(propName)) {
-                        diagnostics.push(new Diagnostic(
-                            new Range(pStart, pEnd),
-                            `Invalid Property Error: Property '${propName}' is not defined for type '${typeName}'.`,
-                            DiagnosticSeverity.Error
-                        ));
-                        continue;
-                    }
-
-                    const propInfo = allProps.get(propName);
-                    if (propInfo) {
-                        const textBeforeMa = stmtText.slice(0, maMatch.index);
-                        const isDest = textBeforeMa.includes('>>');
-
-                        if (isDest) {
-                            if (propInfo.writeable === false) {
-                                diagnostics.push(new Diagnostic(
-                                    new Range(pStart, pEnd),
-                                    `ReadOnly Property Error: Port '${propName}' of type '${typeName}' is read only (writeable: off).`,
-                                    DiagnosticSeverity.Error
-                                ));
-                            }
-                        } else {
-                            if (propInfo.public === false) {
-                                diagnostics.push(new Diagnostic(
-                                    new Range(pStart, pEnd),
-                                    `Private Property Error: Port '${propName}' of type '${typeName}' is private (public: off) and cannot be accessed externally.`,
-                                    DiagnosticSeverity.Error
-                                ));
-                            }
-                        }
-                    }
+        // Validate top-level stream statements (at brace/bracket depth 0)
+        let topBraceDepth = 0;
+        let topBracketDepth = 0;
+        let stmtStartIndex = 0;
+        for (let i = 0; i < maskedText.length; i++) {
+            const ch = maskedText[i];
+            if (ch === '{') {
+                topBraceDepth++;
+            } else if (ch === '}') {
+                if (topBraceDepth > 0) topBraceDepth--;
+                if (topBraceDepth === 0 && topBracketDepth === 0) {
+                    stmtStartIndex = i + 1;
                 }
-
-                // Validate Numeric Literals in Streams (fit within range, valid suffixes, no negative unsigned)
-                const numLitPattern = /(?:(?<=[\s,(\[\-+*\/><=]|^)[+-])?(?:0[xX][0-9a-fA-F](?:_?[0-9a-fA-F])*[a-zA-Z0-9]*|0[bB][01](?:_?[01])*[a-zA-Z0-9]*|[0-9](?:_?[0-9])*\.(?!\.)[0-9]*(?:_?[0-9])*(?:[eE][+-]?[0-9](?:_?[0-9])*)?[a-zA-Z0-9]*|(?<![0-9a-zA-Z_])\.[0-9](?:_?[0-9])*(?:[eE][+-]?[0-9](?:_?[0-9])*)?[a-zA-Z0-9]*|[0-9](?:_?[0-9])*[eE][+-]?[0-9](?:_?[0-9])*[a-zA-Z0-9]*|[0-9](?:_?[0-9])*[a-zA-Z0-9]+|[0-9](?:_?[0-9])*)/g;
-                let numMatch;
-                while ((numMatch = numLitPattern.exec(stmtText)) !== null) {
-                    const litStr = numMatch[0];
-                    if (!litStr || litStr === '+' || litStr === '-') continue;
-                    const afterLit = stmtText.slice(numMatch.index + litStr.length);
-                    if (/^\.\./.test(afterLit)) continue;
-
-                    const parsed = parseNumericLiteral(litStr);
-                    if (parsed && parsed.error) {
-                        const globalCharIndex = sStart + 1 + stmtMatch.index + numMatch.index;
-                        const startPos = document.positionAt(globalCharIndex);
-                        const endPos = document.positionAt(globalCharIndex + litStr.length);
-                        diagnostics.push(new Diagnostic(
-                            new Range(startPos, endPos),
-                            parsed.error,
-                            DiagnosticSeverity.Error
-                        ));
-                    }
+            } else if (ch === '[') {
+                topBracketDepth++;
+            } else if (ch === ']') {
+                if (topBracketDepth > 0) topBracketDepth--;
+                if (topBraceDepth === 0 && topBracketDepth === 0) {
+                    stmtStartIndex = i + 1;
                 }
-
-                const tokenRegex = /\b([_a-zA-Z0-9]+)\b/g;
-                let tokMatch;
-                while ((tokMatch = tokenRegex.exec(stmtText)) !== null) {
-                    const tok = tokMatch[1];
-                    if (/^\d/.test(tok) || parseNumericLiteral(tok) !== undefined || tok === 'on' || tok === 'off' || tok === 'none' || tok === 'true' || tok === 'false') continue;
-                    if (tok === 'llvm' || tok === 'icmp' || tok === 'fcmp' || tok === 'eq' || tok === 'ne' || tok === 'sgt' || tok === 'sge' || tok === 'slt' || tok === 'sle') continue;
-
-                    // If token is immediately followed by a colon (e.g. `entityType:`, `targetSupply:`, `count:`),
-                    // it is a named parameter / port key in a function or reaction invocation, not an undeclared symbol.
-                    const afterTok = stmtText.slice(tokMatch.index + tok.length);
-                    if (/^\s*:/.test(afterTok)) continue;
-
-                    // If token is preceded by a dot (e.g. `ValidInst.publicReadOnly`, `.publicReadOnly`),
-                    // it is a member access / entity property, not an undeclared symbol.
-                    const beforeTok = stmtText.slice(0, tokMatch.index);
-                    if (/\.\s*$/.test(beforeTok)) continue;
-
-                    const decl = findDeclarationInScopeStack(tok, scopeStack);
-                    const isLibSym = getAllLibrarySymbols(document).has(tok);
-                    const isTypeSym = allTypes.has(tok) || BUILTIN_SCALARS[tok];
-
-                    if (!decl && !isLibSym && !isTypeSym) {
-                        const globalCharIndex = sStart + 1 + stmtMatch.index + tokMatch.index;
-                        const startPos = document.positionAt(globalCharIndex);
-                        const endPos = document.positionAt(globalCharIndex + tok.length);
-                        diagnostics.push(new Diagnostic(
-                            new Range(startPos, endPos),
-                            `Undeclared Symbol '${tok}'`,
-                            DiagnosticSeverity.Error
-                        ));
-                    }
-                }
-
-                // 5. Validate Lossy Conversions in Streams (Warning severity with squiggly lines)
-                const stages = stmtText.split(/\s*>>\s*/);
-                if (stages.length >= 2) {
-                    const resolveOperandType = (operand: string): { type?: string; isLiteral?: boolean; literalVal?: string } => {
-                        const trimmed = operand.trim();
-                        const parsedLit = parseNumericLiteral(trimmed);
-                        if (parsedLit && parsedLit.isValid) {
-                            return { type: parsedLit.type, isLiteral: true, literalVal: trimmed };
-                        }
-                        if (trimmed === 'on' || trimmed === 'off') {
-                            return { type: 'Switch', isLiteral: true, literalVal: trimmed };
-                        }
-                        const memberMatch = /^([_a-zA-Z0-9]+)\.([_a-zA-Z0-9]+)$/.exec(trimmed);
-                        if (memberMatch) {
-                            const entName = memberMatch[1];
-                            const propName = memberMatch[2];
-                            const decl = findDeclarationInScopeStack(entName, scopeStack);
-                            if (decl && (decl.type || decl.kind)) {
-                                const tName = decl.type || decl.kind;
-                                const tInfo = allTypes.get(tName) || allTypes.get(TYPE_ALIASES[tName] || tName);
-                                if (tInfo && tInfo.properties) {
-                                    const pInfo = tInfo.properties.find(p => p.name === propName);
-                                    if (pInfo && pInfo.types && pInfo.types.length > 0) {
-                                        return { type: pInfo.types[0] };
-                                    }
-                                }
-                            }
-                            return { type: 'Real' };
-                        }
-                        const idMatch = /^([_a-zA-Z0-9]+)/.exec(trimmed);
-                        if (idMatch) {
-                            const symName = idMatch[1];
-                            const decl = findDeclarationInScopeStack(symName, scopeStack);
-                            if (decl) {
-                                return { type: decl.type || 'Real' };
-                            }
-                        }
-                        const binMatch = /(.+?)\s*([\+\-\*\/])\s*(.+)/.exec(trimmed);
-                        if (binMatch) {
-                            const left = resolveOperandType(binMatch[1]);
-                            const right = resolveOperandType(binMatch[3]);
-                            if (left.type && right.type) {
-                                const leftInfo = DATA_TYPE_MAP[left.type];
-                                const rightInfo = DATA_TYPE_MAP[right.type];
-                                if (leftInfo && rightInfo) {
-                                    if (leftInfo.kind === 'float' || rightInfo.kind === 'float') {
-                                        const promoted = (leftInfo.bits || 64) >= (rightInfo.bits || 64) ? (leftInfo.kind === 'float' ? left.type : right.type) : right.type;
-                                        return { type: promoted };
-                                    }
-                                    const s1 = leftInfo.signed ?? true;
-                                    const s2 = rightInfo.signed ?? true;
-                                    const b1 = leftInfo.bits || 32;
-                                    const b2 = rightInfo.bits || 32;
-                                    if (s1 === s2) {
-                                        return { type: b1 >= b2 ? left.type : right.type };
-                                    }
-                                    const signedBits = s1 ? b1 : b2;
-                                    const unsignedBits = s1 ? b2 : b1;
-                                    if (signedBits > unsignedBits) {
-                                        return { type: s1 ? left.type : right.type };
-                                    }
-                                    const neededBits = unsignedBits * 2;
-                                    if (neededBits <= 16) return { type: 'Int16' };
-                                    if (neededBits <= 32) return { type: 'Int32' };
-                                    return { type: 'Int64' };
-                                }
-                            }
-                        }
-                        return {};
-                    };
-
-                    for (let stageIdx = 0; stageIdx < stages.length - 1; stageIdx++) {
-                        const srcStr = stages[stageIdx];
-                        const dstStr = stages[stageIdx + 1];
-                        const srcInfo = resolveOperandType(srcStr);
-                        const dstInfo = resolveOperandType(dstStr);
-
-                        if (dstInfo.type) {
-                            let riskMsg: string | null = null;
-                            if (srcInfo.isLiteral && srcInfo.literalVal !== undefined) {
-                                riskMsg = getLiteralConversionRisk(srcInfo.literalVal, dstInfo.type);
-                            } else if (srcInfo.type) {
-                                riskMsg = getConversionRisk(srcInfo.type, dstInfo.type);
-                            }
-
-                            if (riskMsg) {
-                                const stmtGlobalIndex = sStart + 1 + stmtMatch.index;
-                                const startPos = document.positionAt(stmtGlobalIndex);
-                                const endPos = document.positionAt(stmtGlobalIndex + stmtMatch[0].length);
-                                diagnostics.push(new Diagnostic(
-                                    new Range(startPos, endPos),
-                                    `Warning: Conversion from '${srcInfo.type || 'literal'}' to '${dstInfo.type}' ${riskMsg}`,
-                                    DiagnosticSeverity.Warning
-                                ));
-                            }
+            } else if (ch === ';') {
+                if (topBraceDepth === 0 && topBracketDepth === 0) {
+                    const rawStmt = maskedText.substring(stmtStartIndex, i);
+                    if (rawStmt.includes('>>')) {
+                        const stmtTrimmed = rawStmt.trim();
+                        if (stmtTrimmed) {
+                            const offsetInRaw = rawStmt.indexOf(stmtTrimmed);
+                            const actualBase = stmtStartIndex + (offsetInRaw >= 0 ? offsetInRaw : 0);
+                            const stmtLine = getLineNumber(text, actualBase);
+                            validateStreamStatement(stmtTrimmed, actualBase, stmtLine, stmtTrimmed.length);
                         }
                     }
+                    stmtStartIndex = i + 1;
                 }
             }
         }
