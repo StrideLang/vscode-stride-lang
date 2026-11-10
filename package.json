@@ -75,7 +75,8 @@
                         "entity.name.function.stride"
                     ],
                     "variable": [
-                        "variable.other.constant.stride"
+                        "variable.other.constant.stride",
+                        "variable.other.stride"
                     ],
                     "property": [
                         "keyword.control.property.stride",
@@ -224,6 +225,27 @@
                     ],
                     "default": "off",
                     "description": "Traces the communication between VS Code and the Stride language server."
+                },
+                "stride.features": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "default": [],
+                    "description": "List of enabled features or variants for Stride compilation (passed to stridec via -D)."
+                },
+                "stride.disabledFeatures": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "default": [],
+                    "description": "List of explicitly disabled features or variants for Stride compilation (passed to stridec via --no-feature)."
+                },
+                "stride.noDefaultFeatures": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Disable declared default features during Stride compilation (passed to stridec via --no-default-features)."
                 }
             }
         }

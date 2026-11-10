@@ -197,5 +197,39 @@
             "signal ${1:Name}[${2:Index} in ${3:0:8}] { domain: ${4:RootDomain}, type: ${5:Real} }"
         ],
         "description": "Declare a Stride array signal over a range"
+    },
+    "Feature Toggle": {
+        "prefix": "feature",
+        "body": [
+            "feature ${1:FeatureName}"
+        ],
+        "description": "Declare a Stride feature toggle"
+    },
+    "Feature Group": {
+        "prefix": "featuregroup",
+        "body": [
+            "feature ${1:FeatureName} {",
+            "\tvariants: [ ${2:VariantA}, ${3:VariantB} ]",
+            "\tdefault: ${2:VariantA}",
+            "}",
+            "$0"
+        ],
+        "description": "Declare a Stride feature group with mutually exclusive variants"
+    },
+    "Conditional Inclusion Directive": {
+        "prefix": "@with",
+        "body": [
+            "@with(${1:Condition})"
+        ],
+        "description": "Conditionally include declaration or expression based on feature expression"
+    },
+    "Conditional Block Group": {
+        "prefix": "@withgroup",
+        "body": [
+            "@with(${1:Condition}) {",
+            "\t$0",
+            "}"
+        ],
+        "description": "Conditionally guard a group of declarations by a feature expression"
     }
 }

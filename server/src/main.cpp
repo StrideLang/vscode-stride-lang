@@ -37,6 +37,7 @@
 #include "stride/stridegen/codeanalysis.hpp"
 #include "stride/stridegen/coderesolver.hpp"
 #include "stride/stridegen/codevalidator.hpp"
+#include "stride/stridegen/featureresolver.hpp"
 #include "stride/stridegen/stridesystem.hpp"
 #include "stride/parser/platformnode.h"
 #include "stride/utils/astfunctions.h"
@@ -473,6 +474,9 @@ void publishDiagnostics(const std::string &uri, const std::vector<LangError> &er
         } else if (err.type == LangError::ConstraintFail) {
             if (err.errorTokens.size() > 3) searchTokens.push_back(err.errorTokens[3]);
             if (err.errorTokens.size() > 1) searchTokens.push_back(err.errorTokens[1]);
+        } else if (err.type == LangError::InvalidFeatureVariant) {
+            if (err.errorTokens.size() > 1) searchTokens.push_back(err.errorTokens[1]);
+            if (err.errorTokens.size() > 0) searchTokens.push_back(err.errorTokens[0]);
         } else if (err.type == LangError::DuplicateSymbol) {
             if (!err.errorTokens.empty()) searchTokens.push_back(err.errorTokens[0]);
         } else if (err.type == LangError::UndeclaredSymbol) {
@@ -620,6 +624,26 @@ void analyzeDocument(DocumentState &doc) {
         doc.importedTree = std::make_shared<AST>();
         loadImportsForDocument(doc.uri, doc.tree, doc.importedTree);
 
+        // 0. Resolve features and conditional compilation on a working validation AST
+        ASTNode valTree = AST::parseFile(tempFile.c_str(), currentPath.c_str());
+        if (valTree) {
+            try {
+                FeatureResolver featureResolver(valTree);
+                if (!featureResolver.process()) {
+                    for (const auto &err : featureResolver.getErrors()) {
+                        if (err.filename == tempFile ||
+                            err.filename == doc.uri ||
+                            err.filename.empty() ||
+                            err.filename == currentPath) {
+                            doc.errors.push_back(err);
+                        }
+                    }
+                }
+            } catch (...) {
+                // Safety catch
+            }
+        }
+
         // Build combined tree with standard library, imported library, and document symbols
         ASTNode combinedTree = std::make_shared<AST>();
         if (g_libraryRootTree) {
@@ -632,7 +656,8 @@ void analyzeDocument(DocumentState &doc) {
                 combinedTree->addChild(impChild);
             }
         }
-        for (const auto &docChild : doc.tree->getChildren()) {
+        ASTNode sourceForValidation = valTree ? valTree : doc.tree;
+        for (const auto &docChild : sourceForValidation->getChildren()) {
             combinedTree->addChild(docChild);
             auto decl = std::dynamic_pointer_cast<DeclarationNode>(docChild);
             if (decl) {
@@ -653,7 +678,7 @@ void analyzeDocument(DocumentState &doc) {
         // 1. Validate AST types using ASTValidation from strideutils
         try {
             std::vector<LangError> valErrors;
-            ASTValidation::validateTypes(doc.tree, valErrors, {}, combinedTree, {}, "");
+            ASTValidation::validateTypes(sourceForValidation, valErrors, {}, combinedTree, {}, "");
             doc.errors.insert(doc.errors.end(), valErrors.begin(), valErrors.end());
         } catch (...) {
             // Safety catch
@@ -677,29 +702,26 @@ void analyzeDocument(DocumentState &doc) {
         // 3. Run CodeResolver and full CodeValidator on resolved AST.
         // Validates symbol uniqueness, array bounds/sizes, stream sizes, constraints,
         // and detects lossy conversions.
-        if (!g_strideRoot.empty() && doc.errors.empty()) {
+        if (!g_strideRoot.empty() && doc.errors.empty() && valTree) {
             try {
-                ASTNode resolved = AST::parseFile(tempFile.c_str(), currentPath.c_str());
-                if (resolved) {
-                    ASTFunctions::preprocess(resolved, nullptr, importPaths, g_strideRoot);
-                    CodeResolver resolver(resolved, g_strideRoot);
-                    if (safeResolveProcess(&resolver)) {
-                        CodeValidator validator(resolved, CodeValidator::NO_RATE_VALIDATION);
-                        for (const auto &err : validator.getErrors()) {
-                            if (err.filename == tempFile ||
-                                err.filename == doc.uri ||
-                                err.filename.empty() ||
-                                err.filename == currentPath) {
-                                doc.errors.push_back(err);
-                            }
+                ASTFunctions::preprocess(valTree, nullptr, importPaths, g_strideRoot);
+                CodeResolver resolver(valTree, g_strideRoot);
+                if (safeResolveProcess(&resolver)) {
+                    CodeValidator validator(valTree, CodeValidator::NO_RATE_VALIDATION);
+                    for (const auto &err : validator.getErrors()) {
+                        if (err.filename == tempFile ||
+                            err.filename == doc.uri ||
+                            err.filename.empty() ||
+                            err.filename == currentPath) {
+                            doc.errors.push_back(err);
                         }
-                        for (const auto &warning : validator.getWarnings()) {
-                            if (warning.filename == tempFile ||
-                                warning.filename == doc.uri ||
-                                warning.filename.empty() ||
-                                warning.filename == currentPath) {
-                                doc.errors.push_back(warning);
-                            }
+                    }
+                    for (const auto &warning : validator.getWarnings()) {
+                        if (warning.filename == tempFile ||
+                            warning.filename == doc.uri ||
+                            warning.filename.empty() ||
+                            warning.filename == currentPath) {
+                            doc.errors.push_back(warning);
                         }
                     }
                 }
@@ -1011,10 +1033,38 @@ std::string renderDeclarationHover(std::shared_ptr<DeclarationNode> decl, const 
         md << "alias " << declName;
     } else if (entityType == "typeClass") {
         md << "typeClass " << declName;
+    } else if (entityType == "feature") {
+        md << "feature " << declName;
     } else {
         md << entityType << " " << declName;
     }
     md << "\n```\n";
+
+    if (entityType == "feature") {
+        md << "- **Kind**: `feature`\n";
+        ASTNode varVal = decl->getPropertyValue("variants");
+        if (varVal && varVal->getNodeType() == AST::List) {
+            std::string varStr = "[ ";
+            bool first = true;
+            for (const auto &c : varVal->getChildren()) {
+                if (!first) varStr += ", ";
+                first = false;
+                varStr += c->toText(0, 0, false);
+            }
+            varStr += " ]";
+            md << "- **Variants**: `" << varStr << "`\n";
+        }
+        ASTNode defVal = decl->getPropertyValue("default");
+        if (defVal) {
+            md << "- **Default**: `" << defVal->toText(0, 0, false) << "`\n";
+        }
+        md << "\n";
+    }
+
+    ASTNode condNode = decl->getCompilerProperty("_feature_condition");
+    if (condNode) {
+        md << "**Condition**: `@with(" << condNode->toText(0, 0, false) << ")`\n\n";
+    }
 
     // Detailed metadata for constant array or scalar constant
     if (entityType == "constant" && isArray) {
@@ -1586,6 +1636,7 @@ std::string renderPropertyHover(
 
     // Built-in properties fallback with Allowed Types information
     if (propName == "type") return "### Property: `type`\n\n- **Allowed Types**: `_DataType, _TypeClass`\n\nSpecifies the data type or class constraint of this property or signal.";
+    if (propName == "variants") return "### Property: `variants`\n\n- **Allowed Types**: `List of [_Any]`\n\nMutually exclusive variants available for this feature group.";
     if (propName == "name") return "### Property: `name`\n\n- **Allowed Types**: `_StringLiteral`\n\nIdentifier name of the entity or port.";
     if (propName == "entity") return "### Property: `entity`\n\n- **Allowed Types**: `_Entity`\n\nSpecifies the target entity or type referenced by an `alias` declaration.";
     if (propName == "default") return "### Property: `default`\n\n- **Allowed Types**: `_Any`\n\nDefault or initial value for this signal or property.";
@@ -1732,6 +1783,12 @@ void handleHover(const std::string &id, const std::string &uri, int line, int ch
                         hoverText = "### Keyword: `use`\n\nImports definitions with optional aliasing (e.g. `use Math as M`).";
                     } else if (token == "as") {
                         hoverText = "### Keyword: `as`\n\nSpecifies a namespace alias for an imported module.";
+                    } else if (token == "feature") {
+                        hoverText = "### Keyword: `feature`\n\nDeclares a configurable feature toggle or feature group with optional variants.";
+                    } else if (token == "@with" || token == "with") {
+                        hoverText = "### Directive: `@with`\n\nConditionally includes a declaration, block, stream, or property value based on a boolean feature expression (e.g. `@with(FeatureA && !FeatureB)`).";
+                    } else if (token == "@force" || token == "force") {
+                        hoverText = "### Directive: `@force`\n\nForces a specific feature variant to be selected.";
                     }
                 }
             }
@@ -1851,6 +1908,8 @@ std::string renderDocumentSymbol(ASTNode node) {
                 symbolKind = 23; // Struct
             } else if (type == "_domainDefinition" || type == "gameDefinition" || type == "domainDeclaration" || type == "type") {
                 symbolKind = 5; // Class
+            } else if (type == "feature") {
+                symbolKind = 11; // Interface (11)
             } else if (type == "typeProperty" || type == "property") {
                 symbolKind = 7; // Property
             } else if (type.find("Port") != std::string::npos || type == "port") {
@@ -1971,6 +2030,9 @@ void handleCompletion(const std::string &id, const std::string &uri = "", int li
         {"propertyOutputPort", 8, "Property Output Port"},
         {"port", 8, "Port Declaration"},
         {"alias", 7, "Type / Entity Alias"},
+        {"feature", 7, "Feature Declaration"},
+        {"@with", 14, "Conditional Feature Inclusion"},
+        {"@force", 14, "Force Feature Variant Directive"},
         {"import", 14, "Import Directive"},
         {"use", 14, "Use Directive"},
         {"as", 14, "Namespace Alias Keyword"},
@@ -2001,6 +2063,7 @@ void handleCompletion(const std::string &id, const std::string &uri = "", int li
         {"_FloatTypes", 7, "Type Class: Any Float Type"},
         {"_DataTypes", 7, "Type Class: All Data Types"},
         {"default:", 10, "Property: default initial value"},
+        {"variants:", 10, "Property: feature variants"},
         {"reset:", 10, "Property: reset behaviour"},
         {"domain:", 10, "Property: domain coordinator"},
         {"type:", 10, "Property: data or schema type"},

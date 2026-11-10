@@ -768,6 +768,8 @@ interface ScopeDeclaration {
     generatorRange?: string;
     isAnonymous?: boolean;
     fromDomain?: string;
+    withCondition?: string;
+    variants?: string[];
 }
 
 interface ScopeContext {
@@ -792,6 +794,26 @@ interface ScopeContext {
     declBoundBlock?: string;
     enclosingDecls?: EnclosingDecl[];
     isAnonymous?: boolean;
+    withCondition?: string;
+    variants?: string[];
+}
+
+function extractBalancedParens(text: string, openParenIdx: number): { content: string; endIndex: number } | undefined {
+    if (openParenIdx < 0 || openParenIdx >= text.length || text[openParenIdx] !== '(') return undefined;
+    let depth = 0;
+    for (let i = openParenIdx; i < text.length; i++) {
+        if (text[i] === '(') depth++;
+        else if (text[i] === ')') {
+            depth--;
+            if (depth === 0) {
+                return {
+                    content: text.substring(openParenIdx + 1, i),
+                    endIndex: i + 1
+                };
+            }
+        }
+    }
+    return undefined;
 }
 
 function stripComments(text: string): string {
@@ -996,6 +1018,7 @@ function parseDeclarationsFromBlock(blockBody: string, baseLine: number, filePat
     const decls: ScopeDeclaration[] = [];
     const wordRegex = /\b([_a-zA-Z0-9]+)\b/g;
     let wMatch;
+    let pendingWithCondition: { condition: string; line: number } | undefined;
 
     while ((wMatch = wordRegex.exec(maskedBody)) !== null) {
         const word = wMatch[1];
@@ -1006,6 +1029,57 @@ function parseDeclarationsFromBlock(blockBody: string, baseLine: number, filePat
         let dLine = baseLine;
         for (let i = 0; i < idx; i++) {
             if (blockBody[i] === '\n') dLine++;
+        }
+
+        const hasAtPrefix = idx > 0 && maskedBody[idx - 1] === '@';
+        if (word === 'with' && (hasAtPrefix || idx === 0 || /\s/.test(maskedBody[idx - 1]))) {
+            const afterWith = maskedBody.substring(idx + word.length);
+            const parenMatch = /^\s*\(/.exec(afterWith);
+            if (parenMatch) {
+                const openParenIdx = idx + word.length + parenMatch[0].length - 1;
+                const parenResult = extractBalancedParens(maskedBody, openParenIdx);
+                if (parenResult) {
+                    const condition = parenResult.content.trim();
+                    const afterParens = maskedBody.substring(parenResult.endIndex).trimStart();
+                    if (afterParens.startsWith('{')) {
+                        const block = extractBraceBlock(blockBody, parenResult.endIndex, maskedBody);
+                        if (block) {
+                            const innerDecls = parseDeclarationsFromBlock(block.body, dLine, filePath);
+                            for (const d of innerDecls) {
+                                if (!d.withCondition) d.withCondition = condition;
+                                decls.push(d);
+                            }
+                            wordRegex.lastIndex = block.endIndex;
+                            continue;
+                        }
+                    } else {
+                        pendingWithCondition = { condition, line: dLine };
+                        wordRegex.lastIndex = parenResult.endIndex;
+                        continue;
+                    }
+                }
+            }
+        }
+
+        if (word === 'feature') {
+            const afterFeature = maskedBody.substring(idx + 7);
+            const braceMatch = /^\s+([_a-zA-Z0-9]+)\s*(?=\{)/.exec(afterFeature);
+            const noBraceMatch = /^\s+([_a-zA-Z0-9]+)\s*(?:;|\r?\n|$)/.exec(afterFeature);
+            if (!braceMatch && noBraceMatch) {
+                const featName = noBraceMatch[1];
+                decls.push({
+                    name: featName,
+                    kind: 'feature',
+                    line: dLine,
+                    signature: `feature ${featName}`,
+                    type: 'feature',
+                    meta: `Feature toggle \`${featName}\``,
+                    withCondition: pendingWithCondition && Math.abs(dLine - pendingWithCondition.line) <= 3 ? pendingWithCondition.condition : undefined
+                });
+                pendingWithCondition = undefined;
+                wordRegex.lastIndex = idx + 7 + noBraceMatch[0].length;
+                continue;
+            }
         }
 
         if (word === 'module' || word === 'reaction' || word === 'loop') {
@@ -1021,17 +1095,21 @@ function parseDeclarationsFromBlock(blockBody: string, baseLine: number, filePat
                     const declDomain = extractTopLevelField(block.body, block.maskedBody, 'domain');
                     const declDefaultVal = extractTopLevelField(block.body, block.maskedBody, 'default');
 
+                    const withCond = pendingWithCondition && Math.abs(dLine - pendingWithCondition.line) <= 3 ? pendingWithCondition.condition : undefined;
+                    pendingWithCondition = undefined;
+
                     decls.push({
                         name,
                         kind: word,
                         line: dLine,
-                        signature: `${word} ${callableInfo.headerStr.trim().replace(/\s+/g, ' ')}`,
+                        signature: withCond ? `@with(${withCond}) ${word} ${callableInfo.headerStr.trim().replace(/\s+/g, ' ')}` : `${word} ${callableInfo.headerStr.trim().replace(/\s+/g, ' ')}`,
                         body: block.body,
                         meta: declMeta,
                         type: declType,
                         domain: declDomain,
                         defaultVal: declDefaultVal,
-                        isAnonymous: !parsedHeader.callableName
+                        isAnonymous: !parsedHeader.callableName,
+                        withCondition: withCond
                     });
                     wordRegex.lastIndex = callableInfo.bodyStart;
                     continue;
@@ -1095,12 +1173,36 @@ function parseDeclarationsFromBlock(blockBody: string, baseLine: number, filePat
                 const declDefaultVal = extractTopLevelField(pBody, block.maskedBody, 'default');
                 const declBoundBlock = (kind === 'alias') ? extractTopLevelField(pBody, block.maskedBody, 'entity') : undefined;
 
+                const withCond = pendingWithCondition && Math.abs(dLine - pendingWithCondition.line) <= 3 ? pendingWithCondition.condition : undefined;
+                pendingWithCondition = undefined;
+
                 let sig = `${kind} ${name}`;
                 if (bracketContent !== undefined) {
                     sig += `[${bracketContent}]`;
                 }
                 if (annotation) {
                     sig += ` @${annotation}`;
+                }
+                if (withCond) {
+                    sig = `@with(${withCond}) ${sig}`;
+                }
+
+                let featureVariants: string[] | undefined;
+                if (kind === 'feature') {
+                    const varList = extractTopLevelList(pBody, block.maskedBody, 'variants');
+                    if (varList.length > 0) {
+                        featureVariants = varList;
+                        for (const vName of varList) {
+                            decls.push({
+                                name: vName,
+                                kind: 'variant',
+                                line: dLine,
+                                signature: `${name}::${vName}`,
+                                type: 'variant',
+                                meta: `Variant \`${vName}\` of feature \`${name}\``
+                            });
+                        }
+                    }
                 }
 
                 decls.push({
@@ -1117,7 +1219,9 @@ function parseDeclarationsFromBlock(blockBody: string, baseLine: number, filePat
                     arraySpec,
                     generatorVar,
                     generatorRange,
-                    isAnonymous
+                    isAnonymous,
+                    withCondition: withCond,
+                    variants: featureVariants
                 });
                 wordRegex.lastIndex = headerEnd;
                 continue;
@@ -1146,6 +1250,7 @@ function parseScopeTree(text: string, filePath: string, preMaskedText?: string):
 
     const discoveredScopes: ScopeContext[] = [];
     const enclosingDecls: EnclosingDecl[] = [];
+    let pendingWithCondition: { condition: string; line: number } | undefined;
 
     const wordRegex = /\b([_a-zA-Z0-9]+)\b/g;
     let wMatch;
@@ -1154,6 +1259,106 @@ function parseScopeTree(text: string, filePath: string, preMaskedText?: string):
         const idx = wMatch.index;
         const afterWord = maskedText.substring(idx + word.length).trimStart();
         if (afterWord.startsWith(':') && !afterWord.startsWith('::')) continue;
+
+        // Check for @with directive or @with(...) { ... } block group
+        const hasAtPrefix = idx > 0 && maskedText[idx - 1] === '@';
+        if (word === 'with' && (hasAtPrefix || idx === 0 || /\s/.test(maskedText[idx - 1]))) {
+            const withStart = hasAtPrefix ? idx - 1 : idx;
+            const afterWith = maskedText.substring(idx + word.length);
+            const parenMatch = /^\s*\(/.exec(afterWith);
+            if (parenMatch) {
+                const openParenIdx = idx + word.length + parenMatch[0].length - 1;
+                const parenResult = extractBalancedParens(maskedText, openParenIdx);
+                if (parenResult) {
+                    const condition = parenResult.content.trim();
+                    const afterParens = maskedText.substring(parenResult.endIndex).trimStart();
+                    if (afterParens.startsWith('{')) {
+                        const braceIdx = maskedText.indexOf('{', parenResult.endIndex);
+                        const block = extractBraceBlock(text, parenResult.endIndex, maskedText);
+                        if (block) {
+                            const startOffset = withStart;
+                            const endOffset = block.endIndex;
+                            const startLine = getLineNumber(text, startOffset);
+                            const endLine = getLineNumber(text, endOffset);
+                            const scope: ScopeContext = {
+                                name: `@with(${condition})`,
+                                kind: 'group',
+                                startLine,
+                                endLine,
+                                startOffset,
+                                endOffset,
+                                declarations: new Map(),
+                                ports: new Map(),
+                                boundPorts: new Map(),
+                                children: [],
+                                withCondition: condition,
+                                declMeta: `Conditional block group guarded by \`@with(${condition})\``
+                            };
+                            discoveredScopes.push(scope);
+                            enclosingDecls.push({
+                                kind: 'group',
+                                name: `@with(${condition})`,
+                                start: startOffset,
+                                end: endOffset,
+                                line: startLine
+                            });
+                            wordRegex.lastIndex = braceIdx + 1;
+                            continue;
+                        }
+                    } else {
+                        pendingWithCondition = {
+                            condition,
+                            line: getLineNumber(text, withStart)
+                        };
+                        wordRegex.lastIndex = parenResult.endIndex;
+                        continue;
+                    }
+                }
+            }
+        }
+
+        // Check for property-less feature declaration, e.g.: feature HardwareSPI
+        if (word === 'feature') {
+            const afterFeature = maskedText.substring(idx + 7);
+            const braceMatch = /^\s+([_a-zA-Z0-9]+)\s*(?=\{)/.exec(afterFeature);
+            const noBraceMatch = /^\s+([_a-zA-Z0-9]+)\s*(?:;|\r?\n|$)/.exec(afterFeature);
+            if (!braceMatch && noBraceMatch) {
+                const featName = noBraceMatch[1];
+                const startOffset = idx;
+                const endOffset = idx + 7 + noBraceMatch[0].length;
+                const startLine = getLineNumber(text, startOffset);
+                const endLine = startLine;
+
+                const withCond = pendingWithCondition && Math.abs(startLine - pendingWithCondition.line) <= 3 ? pendingWithCondition.condition : undefined;
+                pendingWithCondition = undefined;
+
+                const scope: ScopeContext = {
+                    name: featName,
+                    kind: 'feature',
+                    startLine,
+                    endLine,
+                    startOffset,
+                    endOffset,
+                    declarations: new Map(),
+                    ports: new Map(),
+                    boundPorts: new Map(),
+                    children: [],
+                    declMeta: `Feature toggle \`${featName}\``,
+                    declType: 'feature',
+                    withCondition: withCond
+                };
+                discoveredScopes.push(scope);
+                enclosingDecls.push({
+                    kind: 'feature',
+                    name: featName,
+                    start: startOffset,
+                    end: endOffset,
+                    line: startLine
+                });
+                wordRegex.lastIndex = endOffset;
+                continue;
+            }
+        }
 
         if (word === 'module' || word === 'reaction' || word === 'loop') {
             const callableInfo = findCallableBodyStart(maskedText, idx + word.length);
@@ -1173,6 +1378,9 @@ function parseScopeTree(text: string, filePath: string, preMaskedText?: string):
                     const declDomain = extractTopLevelField(block.body, block.maskedBody, 'domain');
                     const declDefaultVal = extractTopLevelField(block.body, block.maskedBody, 'default');
 
+                    const withCond = pendingWithCondition && Math.abs(startLine - pendingWithCondition.line) <= 3 ? pendingWithCondition.condition : undefined;
+                    pendingWithCondition = undefined;
+
                     const scope: ScopeContext = {
                         name,
                         kind: word,
@@ -1188,7 +1396,8 @@ function parseScopeTree(text: string, filePath: string, preMaskedText?: string):
                         declType,
                         declDomain,
                         declDefaultVal,
-                        isAnonymous: !parsedHeader.callableName
+                        isAnonymous: !parsedHeader.callableName,
+                        withCondition: withCond
                     };
 
                     const addHeaderPortItem = (p: CallablePortSpec, portType: 'mainInputPort' | 'propertyInputPort' | 'mainOutputPort') => {
@@ -1310,6 +1519,17 @@ function parseScopeTree(text: string, filePath: string, preMaskedText?: string):
                 const declDefaultVal = extractTopLevelField(block.body, block.maskedBody, 'default');
                 const declBoundBlock = (kind === 'alias') ? extractTopLevelField(block.body, block.maskedBody, 'entity') : undefined;
 
+                const withCond = pendingWithCondition && Math.abs(startLine - pendingWithCondition.line) <= 3 ? pendingWithCondition.condition : undefined;
+                pendingWithCondition = undefined;
+
+                let featureVariants: string[] | undefined;
+                if (kind === 'feature') {
+                    const varList = extractTopLevelList(block.body, block.maskedBody, 'variants');
+                    if (varList.length > 0) {
+                        featureVariants = varList;
+                    }
+                }
+
                 const scope: ScopeContext = {
                     name,
                     kind,
@@ -1329,7 +1549,9 @@ function parseScopeTree(text: string, filePath: string, preMaskedText?: string):
                     declDomain,
                     declDefaultVal,
                     declBoundBlock,
-                    isAnonymous
+                    isAnonymous,
+                    withCondition: withCond,
+                    variants: featureVariants
                 };
 
                 if (generatorVar) {
@@ -1387,25 +1609,45 @@ function parseScopeTree(text: string, filePath: string, preMaskedText?: string):
         scope.parent = parentScope;
         parentScope.children.push(scope);
         if (scope.name && !scope.name.startsWith('[') && !scope.name.includes('_line')) {
+            const declKey = scope.withCondition ? `${scope.name}#with_${scope.startLine}` : scope.name;
+            const decl: ScopeDeclaration = {
+                name: scope.name,
+                kind: scope.kind,
+                line: scope.startLine,
+                signature: scope.withCondition ? `@with(${scope.withCondition}) ${scope.kind} ${scope.name}${scope.arraySpec ? `[${scope.arraySpec}]` : ''}` : `${scope.kind} ${scope.name}${scope.arraySpec ? `[${scope.arraySpec}]` : ''}`,
+                type: scope.declType || scope.kind,
+                domain: scope.declDomain,
+                meta: scope.declMeta || `${scope.kind} declaration`,
+                defaultVal: scope.declDefaultVal,
+                boundBlock: scope.declBoundBlock,
+                arraySpec: scope.arraySpec,
+                generatorVar: scope.generatorVar,
+                generatorRange: scope.generatorRange,
+                withCondition: scope.withCondition,
+                variants: scope.variants
+            };
+            if (parentScope.boundPorts.has(scope.name)) {
+                decl.associatedPort = parentScope.boundPorts.get(scope.name);
+            }
             if (!parentScope.declarations.has(scope.name)) {
-                const decl: ScopeDeclaration = {
-                    name: scope.name,
-                    kind: scope.kind,
-                    line: scope.startLine,
-                    signature: `${scope.kind} ${scope.name}${scope.arraySpec ? `[${scope.arraySpec}]` : ''}`,
-                    type: scope.declType || scope.kind,
-                    domain: scope.declDomain,
-                    meta: scope.declMeta || `${scope.kind} declaration`,
-                    defaultVal: scope.declDefaultVal,
-                    boundBlock: scope.declBoundBlock,
-                    arraySpec: scope.arraySpec,
-                    generatorVar: scope.generatorVar,
-                    generatorRange: scope.generatorRange
-                };
-                if (parentScope.boundPorts.has(scope.name)) {
-                    decl.associatedPort = parentScope.boundPorts.get(scope.name);
-                }
                 parentScope.declarations.set(scope.name, decl);
+            }
+            if (scope.withCondition) {
+                parentScope.declarations.set(declKey, decl);
+            }
+        }
+        if (scope.kind === 'feature' && scope.variants) {
+            for (const v of scope.variants) {
+                const varDecl: ScopeDeclaration = {
+                    name: v,
+                    kind: 'variant',
+                    line: scope.startLine,
+                    signature: `${scope.name}::${v}`,
+                    type: 'variant',
+                    meta: `Variant \`${v}\` of feature \`${scope.name}\``
+                };
+                scope.declarations.set(v, varDecl);
+                parentScope.declarations.set(`${scope.name}::${v}`, varDecl);
             }
         }
     }
@@ -1918,7 +2160,7 @@ function syncGrammarWithLibrary(standardLibTypes: Set<string>): void {
         const content = fs.readFileSync(grammarPath, 'utf8');
         const grammar = JSON.parse(content);
         if (grammar.repository && grammar.repository['builtin-types'] && grammar.repository['builtin-types'].patterns && grammar.repository['builtin-types'].patterns[0]) {
-            const sortedTypes = Array.from(standardLibTypes).filter(t => /^_[A-Z][a-zA-Z0-9_]*$/.test(t)).sort();
+            const sortedTypes = Array.from(standardLibTypes).filter(t => /^(_[A-Z]|[A-Z])[a-zA-Z0-9_]*$/.test(t)).sort();
             if (sortedTypes.length === 0) return;
             const newRegex = `\\b(${sortedTypes.join('|')})\\b`;
             if (grammar.repository['builtin-types'].patterns[0].match !== newRegex) {
@@ -2550,6 +2792,17 @@ function renderPropertyHover(
     allTypes: Map<string, TypeInfo>,
     enclosingKind?: string
 ): MarkdownString | undefined {
+    if (propName === 'variants') {
+        const body = `<div style="${HOVER_STYLE}">\n\n` +
+            `**Property \`variants:\`**\n\n` +
+            `- **Allowed Types**: \`List of [_Any]\`\n\n` +
+            `Mutually exclusive variants available for this feature group.\n\n</div>`;
+        const md = new MarkdownString(body, true);
+        md.isTrusted = true;
+        md.supportHtml = true;
+        return md;
+    }
+
     const propMatch = findPropertyDeclaration(propName, allTypes, enclosingKind);
     if (!propMatch) return undefined;
 
@@ -2783,6 +3036,12 @@ function registerFallbackProviders(context: ExtensionContext) {
                     return SymbolKind.Property;
                 } else if (kindStr.includes('Port') || kindStr === 'port') {
                     return SymbolKind.Interface;
+                } else if (kindStr === 'feature') {
+                    return SymbolKind.Interface;
+                } else if (kindStr === 'group' || kindStr === '@with') {
+                    return SymbolKind.Namespace;
+                } else if (kindStr === 'variant') {
+                    return SymbolKind.EnumMember;
                 }
                 return SymbolKind.Variable;
             }
@@ -3069,6 +3328,15 @@ function registerFallbackProviders(context: ExtensionContext) {
             if (word === 'in') {
                 return createCompactHover('keyword in', '### Keyword: `in`\n\nSpecifies the iteration domain or range in generator array declarations (e.g. `[Index in 0:8]`).');
             }
+            if (word === 'feature') {
+                return createCompactHover('keyword feature', '### Keyword: `feature`\n\nDeclares a configurable feature toggle or feature group with optional variants.');
+            }
+            if (word === '@with' || word === 'with') {
+                return createCompactHover('directive @with', '### Directive: `@with`\n\nConditionally includes a declaration, block, stream, or property value based on a boolean feature expression (e.g. `@with(FeatureA && !FeatureB)`).');
+            }
+            if (word === '@force' || word === 'force') {
+                return createCompactHover('directive @force', '### Directive: `@force`\n\nForces a specific feature variant to be selected.');
+            }
 
             // 4. Property Keys fallback
             const propHover = renderPropertyHover(word, allTypes, enclosingDecl?.kind);
@@ -3156,6 +3424,15 @@ function registerFallbackProviders(context: ExtensionContext) {
                 }
                 if (decl.boundBlock) {
                     body += `- **Bound Block**: \`${decl.boundBlock}\`\n`;
+                }
+                if (decl.kind === 'feature') {
+                    body += `- **Kind**: \`feature\`\n`;
+                    if (decl.variants && decl.variants.length > 0) {
+                        body += `- **Variants**: \`[ ${decl.variants.join(', ')} ]\`\n`;
+                    }
+                }
+                if (decl.withCondition) {
+                    body += `- **Condition**: \`@with(${decl.withCondition})\`\n`;
                 }
 
                 if (decl.meta) {
@@ -3389,7 +3666,8 @@ function registerFallbackProviders(context: ExtensionContext) {
                 'signal', 'switch', 'trigger', 'mainInputPort', 'mainOutputPort',
                 'propertyInputPort', 'propertyOutputPort', 'port', 'typeProperty',
                 'module', 'reaction', 'loop', 'state', 'transition', 'action', 'type',
-                '_domainDefinition', 'gameDefinition', 'domainDeclaration', 'platformModule'
+                '_domainDefinition', 'gameDefinition', 'domainDeclaration', 'platformModule',
+                'feature', 'force'
             ]);
 
             for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
@@ -3567,13 +3845,14 @@ function registerFallbackProviders(context: ExtensionContext) {
             const keywords = [
                 '_domainDefinition', 'gameDefinition', 'module', 'reaction', 'loop',
                 'state', 'transition', 'action', 'platformModule', 'signal', 'switch', 'trigger', 'alias',
+                'feature', '@with', '@force',
                 'mainInputPort', 'mainOutputPort', 'propertyInputPort', 'propertyOutputPort',
                 'import', 'use', 'version', 'streamRate', 'in', 'on', 'off', 'none',
                 'Int', 'UInt', 'Real', 'Size', 'Int8', 'Int16', 'Int32', 'Int64',
                 'UInt8', 'UInt16', 'UInt32', 'UInt64', 'Float32', 'Float64', 'Switch', 'String',
                 '_NumericTypes', '_IntegerTypes', '_FloatTypes', '_DataTypes',
                 '_IntType', '_RealType', '_SwitchType', '_StateType',
-                'default:', 'reset:', 'domain:', 'type:', 'rate:', 'meta:', 'entity:',
+                'default:', 'variants:', 'reset:', 'domain:', 'type:', 'rate:', 'meta:', 'entity:',
                 'framework:', 'inputs:', 'outputs:', 'states:', 'transitions:', 'guard:', 'targetState:',
                 'playerTypes:', 'supplies:', 'setupActions:', 'board:', 'stateMachines:', 'end:'
             ];
@@ -3813,8 +4092,10 @@ function registerFallbackProviders(context: ExtensionContext) {
         function checkDuplicateScope(scope: ScopeContext) {
             const seen = new Map<string, ScopeDeclaration>();
             for (const [sName, sDecl] of scope.declarations.entries()) {
+                if (sDecl.withCondition || scope.withCondition) continue;
                 if (seen.has(sName)) {
                     const prev = seen.get(sName)!;
+                    if (prev.withCondition) continue;
                     const dLine = Math.max(0, sDecl.line - 1);
                     const dLineText = lines[dLine] || '';
                     const pos = dLineText.indexOf(sName);
@@ -3833,6 +4114,94 @@ function registerFallbackProviders(context: ExtensionContext) {
             }
         }
         checkDuplicateScope(rootScope);
+
+        // 3b. Validate Feature Expressions (@with and @force directives)
+        const declaredFeatures = new Map<string, Set<string>>(); // feature name -> set of variants
+        const harvestFeaturesFromScope = (sc: ScopeContext) => {
+            if (sc.kind === 'feature') {
+                const varSet = new Set<string>(sc.variants || []);
+                declaredFeatures.set(sc.name, varSet);
+            }
+            for (const [_, decl] of sc.declarations.entries()) {
+                if (decl.kind === 'feature') {
+                    const varSet = new Set<string>(decl.variants || []);
+                    declaredFeatures.set(decl.name, varSet);
+                }
+            }
+            for (const child of sc.children) {
+                harvestFeaturesFromScope(child);
+            }
+        };
+        harvestFeaturesFromScope(rootScope);
+
+        const directiveRegex = /@(with|force)\s*\(/g;
+        let dirMatch: RegExpExecArray | null;
+        while ((dirMatch = directiveRegex.exec(maskedText)) !== null) {
+            const dirKeyword = dirMatch[1];
+            const openParenIdx = dirMatch.index + dirMatch[0].length - 1;
+            const parenResult = extractBalancedParens(maskedText, openParenIdx);
+            if (!parenResult) {
+                const startPos = document.positionAt(dirMatch.index);
+                const endPos = document.positionAt(dirMatch.index + dirMatch[0].length);
+                diagnostics.push(new Diagnostic(
+                    new Range(startPos, endPos),
+                    `Unclosed parenthesis in @${dirKeyword} directive`,
+                    DiagnosticSeverity.Error
+                ));
+                continue;
+            }
+
+            const exprText = parenResult.content;
+            const exprOffset = openParenIdx + 1;
+
+            // Validate feature identifiers in expression: Group::Variant or Feature
+            const featTokRegex = /\b([_a-zA-Z][_a-zA-Z0-9]*(?:::[_a-zA-Z][_a-zA-Z0-9]*)?)\b/g;
+            let fMatch: RegExpExecArray | null;
+            while ((fMatch = featTokRegex.exec(exprText)) !== null) {
+                const rawTok = fMatch[1];
+                const tokOffset = exprOffset + fMatch.index;
+                if (rawTok === 'true' || rawTok === 'false' || rawTok === 'on' || rawTok === 'off') {
+                    continue;
+                }
+
+                if (rawTok.includes('::')) {
+                    const parts = rawTok.split('::');
+                    const group = parts[0];
+                    const variant = parts[1];
+                    if (!declaredFeatures.has(group)) {
+                        const startPos = document.positionAt(tokOffset);
+                        const endPos = document.positionAt(tokOffset + group.length);
+                        diagnostics.push(new Diagnostic(
+                            new Range(startPos, endPos),
+                            `Undeclared feature symbol '${group}'`,
+                            DiagnosticSeverity.Error
+                        ));
+                    } else {
+                        const validVariants = declaredFeatures.get(group)!;
+                        if (!validVariants.has(variant)) {
+                            const varStartOffset = tokOffset + group.length + 2;
+                            const startPos = document.positionAt(varStartOffset);
+                            const endPos = document.positionAt(varStartOffset + variant.length);
+                            diagnostics.push(new Diagnostic(
+                                new Range(startPos, endPos),
+                                `'${variant}' is not a valid variant of feature '${group}'`,
+                                DiagnosticSeverity.Error
+                            ));
+                        }
+                    }
+                } else {
+                    if (!declaredFeatures.has(rawTok)) {
+                        const startPos = document.positionAt(tokOffset);
+                        const endPos = document.positionAt(tokOffset + rawTok.length);
+                        diagnostics.push(new Diagnostic(
+                            new Range(startPos, endPos),
+                            `Undeclared feature symbol '${rawTok}'`,
+                            DiagnosticSeverity.Error
+                        ));
+                    }
+                }
+            }
+        }
 
         // 4. Validate Undeclared Symbols and Lossy Conversions in Streams (ignoring string literals and comments)
         const validateStreamStatement = (stmtText: string, stmtGlobalIndex: number, stmtLine: number, stmtLength: number) => {
@@ -3914,7 +4283,7 @@ function registerFallbackProviders(context: ExtensionContext) {
             let tokMatch;
             while ((tokMatch = tokenRegex.exec(stmtText)) !== null) {
                 const tok = tokMatch[1];
-                if (/^\d/.test(tok) || parseNumericLiteral(tok) !== undefined || tok === 'on' || tok === 'off' || tok === 'none' || tok === 'true' || tok === 'false') continue;
+                if (/^\d/.test(tok) || parseNumericLiteral(tok) !== undefined || tok === 'on' || tok === 'off' || tok === 'none' || tok === 'true' || tok === 'false' || tok === 'with' || tok === 'force' || tok === 'feature') continue;
                 if (tok === 'llvm' || tok === 'icmp' || tok === 'fcmp' || tok === 'eq' || tok === 'ne' || tok === 'sgt' || tok === 'sge' || tok === 'slt' || tok === 'sle') continue;
 
                 // If token is immediately followed by a colon (e.g. `entityType:`, `targetSupply:`, `count:`),
@@ -4338,6 +4707,30 @@ async function executeStrideLaunchConfig(config: DebugConfiguration, targetUri?:
         if (effectiveStrideroot) {
             extraArgs.push(`--strideroot=${effectiveStrideroot}`);
         }
+
+        const configuredFeatures = (config.features && Array.isArray(config.features))
+            ? config.features
+            : workspace.getConfiguration('stride').get<string[]>('features');
+        if (configuredFeatures && Array.isArray(configuredFeatures)) {
+            for (const f of configuredFeatures) {
+                extraArgs.push('-D', f);
+            }
+        }
+        const configuredDisabledFeatures = (config.disabledFeatures && Array.isArray(config.disabledFeatures))
+            ? config.disabledFeatures
+            : workspace.getConfiguration('stride').get<string[]>('disabledFeatures');
+        if (configuredDisabledFeatures && Array.isArray(configuredDisabledFeatures)) {
+            for (const f of configuredDisabledFeatures) {
+                extraArgs.push('--no-feature', f);
+            }
+        }
+        const configuredNoDefault = config.noDefaultFeatures !== undefined
+            ? config.noDefaultFeatures
+            : workspace.getConfiguration('stride').get<boolean>('noDefaultFeatures');
+        if (configuredNoDefault) {
+            extraArgs.push('--no-default-features');
+        }
+
         if (config.args && Array.isArray(config.args)) {
             extraArgs.push(...config.args);
         }
@@ -4364,6 +4757,29 @@ async function executeStrideLaunchConfig(config: DebugConfiguration, targetUri?:
         const extraArgs: string[] = ['-c', filePath, '-o', outFile, `--emit-header=${hdrFile}`];
         if (effectiveStrideroot) {
             extraArgs.push(`--strideroot=${effectiveStrideroot}`);
+        }
+
+        const configuredFeatures = (config.features && Array.isArray(config.features))
+            ? config.features
+            : workspace.getConfiguration('stride').get<string[]>('features');
+        if (configuredFeatures && Array.isArray(configuredFeatures)) {
+            for (const f of configuredFeatures) {
+                extraArgs.push('-D', f);
+            }
+        }
+        const configuredDisabledFeatures = (config.disabledFeatures && Array.isArray(config.disabledFeatures))
+            ? config.disabledFeatures
+            : workspace.getConfiguration('stride').get<string[]>('disabledFeatures');
+        if (configuredDisabledFeatures && Array.isArray(configuredDisabledFeatures)) {
+            for (const f of configuredDisabledFeatures) {
+                extraArgs.push('--no-feature', f);
+            }
+        }
+        const configuredNoDefault = config.noDefaultFeatures !== undefined
+            ? config.noDefaultFeatures
+            : workspace.getConfiguration('stride').get<boolean>('noDefaultFeatures');
+        if (configuredNoDefault) {
+            extraArgs.push('--no-default-features');
         }
         const cmd = buildCommandLine(compiler, extraArgs);
         terminal.sendText(cmd);

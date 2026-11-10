@@ -83,7 +83,7 @@ Stride standard library files (`.stride`) define built-in types, platform module
 | `_domainDefinition`, `gameDefinition`, `domainDeclaration`, `type` | `SymbolKind.Class` | `5` (Class) |
 | `module`, `reaction`, `loop` | `SymbolKind.Function` | `6` (Method/Function) |
 | `typeProperty`, `property` | `SymbolKind.Property` | `7` (Property) |
-| `mainInputPort`, `mainOutputPort`, `propertyInputPort`, `propertyOutputPort`, `port` | `SymbolKind.Interface` | `11` (Interface) |
+| `mainInputPort`, `mainOutputPort`, `propertyInputPort`, `propertyOutputPort`, `port`, `feature` | `SymbolKind.Interface` | `11` (Interface) |
 | `signal`, `switch`, `trigger` | `SymbolKind.Variable` | `13` (Variable) |
 | `state`, `transition` | `SymbolKind.Struct` | `23` (Struct) |
 
