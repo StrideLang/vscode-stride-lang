@@ -47,7 +47,7 @@ import {
     CloseAction,
     ErrorAction
 } from 'vscode-languageclient/node';
-import { provideDocumentFormattingEdits } from './formatter';
+import { provideDocumentFormattingEdits, provideDocumentRangeFormattingEdits } from './formatter';
 
 let client: LanguageClient | undefined;
 let extensionContext: ExtensionContext | undefined;
@@ -5401,11 +5401,15 @@ export async function activate(context: ExtensionContext) {
     // Register F5 debugging and compilation commands
     registerDebugAndExecutionCommands(context);
 
-    // Register document formatting provider (powered by Prettier)
+    // Register document formatting providers (powered by Prettier)
     context.subscriptions.push(
         languages.registerDocumentFormattingEditProvider(
             { scheme: 'file', language: 'stride' },
             { provideDocumentFormattingEdits }
+        ),
+        languages.registerDocumentRangeFormattingEditProvider(
+            { scheme: 'file', language: 'stride' },
+            { provideDocumentRangeFormattingEdits }
         )
     );
 

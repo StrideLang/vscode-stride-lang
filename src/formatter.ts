@@ -238,3 +238,117 @@ export async function provideDocumentFormattingEdits(
 
     return [vscode.TextEdit.replace(fullRange, formatted)];
 }
+
+/**
+ * VS Code DocumentRangeFormattingEditProvider implementation for Stride documents.
+ * Evaluates document context from the top down so that snippet indentation matches
+ * the exact scope depth and stream continuation state, while only generating edits
+ * strictly within the user's selected range.
+ */
+export async function provideDocumentRangeFormattingEdits(
+    document: vscode.TextDocument,
+    range: vscode.Range,
+    options: vscode.FormattingOptions,
+    token?: vscode.CancellationToken
+): Promise<vscode.TextEdit[]> {
+    if (token?.isCancellationRequested) {
+        return [];
+    }
+
+    let resolvedConfig: prettier.Options | null = null;
+    try {
+        resolvedConfig = await prettier.resolveConfig(document.uri.fsPath);
+    } catch {
+        resolvedConfig = null;
+    }
+
+    const tabWidth = resolvedConfig?.tabWidth ?? options.tabSize ?? 4;
+    const useTabs = resolvedConfig?.useTabs ?? (!options.insertSpaces);
+    const indentUnit = useTabs ? '\t' : ' '.repeat(tabWidth);
+
+    const startLine = range.start.line;
+    const endLine = range.end.character === 0 && range.end.line > range.start.line
+        ? range.end.line - 1
+        : range.end.line;
+
+    const text = document.getText();
+    const lines = text.split(/\r?\n/);
+    const maskedText = maskCommentsAndStrings(text);
+    const maskedLines = maskedText.split(/\r?\n/);
+
+    let indentLevel = 0;
+    let inStreamContinuation = false;
+    let streamBaseIndent = 0;
+
+    const edits: vscode.TextEdit[] = [];
+
+    for (let i = 0; i < lines.length; i++) {
+        if (token?.isCancellationRequested) {
+            return [];
+        }
+
+        const orig = lines[i];
+        const trimmed = orig.trim();
+        const maskedLine = maskedLines[i].trim();
+
+        const leadingCloseMatch = maskedLine.match(/^[\}\]\)\s]+/);
+        const leadingCloseCount = leadingCloseMatch
+            ? leadingCloseMatch[0].replace(/\s/g, '').length
+            : 0;
+
+        const currentLineIndent = Math.max(0, indentLevel - leadingCloseCount);
+
+        const startsWithStream = maskedLine.startsWith('>>');
+        if (startsWithStream && !inStreamContinuation) {
+            inStreamContinuation = true;
+            streamBaseIndent = currentLineIndent;
+        }
+
+        const isContinuation = inStreamContinuation && (currentLineIndent >= streamBaseIndent);
+        const effectiveIndent = currentLineIndent + (isContinuation ? 1 : 0);
+
+        if (i >= startLine && i <= endLine) {
+            let targetLine: string;
+            if (trimmed.length === 0) {
+                targetLine = '';
+            } else {
+                targetLine = indentUnit.repeat(effectiveIndent) + trimmed;
+            }
+
+            if (orig !== targetLine) {
+                const lineRange = document.lineAt(i).range;
+                edits.push(vscode.TextEdit.replace(lineRange, targetLine));
+            }
+        }
+
+        if (i > endLine) {
+            // Can terminate loop once past the end of the selection
+            break;
+        }
+
+        // Bracket counting
+        const opens = (maskedLine.match(/[\{\[\(]/g) || []).length;
+        const closes = (maskedLine.match(/[\}\]\)]/g) || []).length;
+        const newIndentLevel = Math.max(0, indentLevel + opens - closes);
+
+        const hasSemicolon = maskedLine.endsWith(';') || (maskedLine.includes(';') && closes >= opens);
+        const hasStreamOp = maskedLine.includes('>>');
+
+        if (inStreamContinuation) {
+            if (hasSemicolon && newIndentLevel <= streamBaseIndent) {
+                inStreamContinuation = false;
+            } else if (newIndentLevel < streamBaseIndent) {
+                inStreamContinuation = false;
+            }
+        } else {
+            if (hasStreamOp && !hasSemicolon) {
+                inStreamContinuation = true;
+                streamBaseIndent = currentLineIndent;
+            }
+        }
+
+        indentLevel = newIndentLevel;
+    }
+
+    return edits;
+}

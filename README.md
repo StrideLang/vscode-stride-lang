@@ -43,9 +43,14 @@ Comprehensive language support and Language Server for **[Stride](https://github
 The extension bundles a dedicated code formatting engine powered by **[Prettier](https://prettier.io/)**. It ensures unified indentation, clean bracket alignments, and consistent structural layout across all `.stride` files without requiring users to install Node.js or any external formatting tools.
 
 ### 1. Manual Formatting
-- **Keyboard Shortcut**: Press **`Shift+Alt+F`** (Windows/Linux) or **`Shift+Option+F`** (macOS).
-- **Command Palette**: Run `Format Document` (`Ctrl+Shift+P` / `Cmd+Shift+P`).
-- **Context Menu**: Right-click anywhere in an open `.stride` file and select **Format Document**.
+- **Format Document**:
+  - Press **`Shift+Alt+F`** (Windows/Linux) or **`Shift+Option+F`** (macOS).
+  - Or run `Format Document` from the Command Palette (`Ctrl+Shift+P` / `Cmd+Shift+P`).
+  - Or right-click anywhere in an open `.stride` file and select **Format Document**.
+- **Format Selection (Range Formatting)**:
+  - Highlight any lines or block of code and press **`Ctrl+K Ctrl+F`** (Windows/Linux) or **`Cmd+K Cmd+F`** (macOS).
+  - Or right-click a selection and select **Format Selection**.
+  - Evaluates surrounding document context to ensure the selection is indented to its exact nesting depth while leaving the rest of the file untouched.
 
 ### 2. Automatic Formatting & Cleanup on Save
 To automatically format and clean up Stride files whenever you save them, configure VS Code's `settings.json` (User settings or Workspace `.vscode/settings.json`):

@@ -136,7 +136,8 @@ The extension bundles a dedicated code formatting engine implemented in [`src/fo
 
 ### Features & Formatting Invariants
 - **Zero-Setup Turnkey Engine**: Prettier is bundled directly within the extension package. End-users do not require Node.js, npm, or any external formatting binaries.
-- **Provider Registration**: Registered unconditionally in `activate()` via `languages.registerDocumentFormattingEditProvider({ scheme: 'file', language: 'stride' }, ...)` to ensure formatting is active in both native LSP mode and fallback mode.
+- **Provider Registration**: Registered unconditionally in `activate()` via `languages.registerDocumentFormattingEditProvider` and `languages.registerDocumentRangeFormattingEditProvider` ({ scheme: 'file', language: 'stride' }) to ensure both whole-document and range formatting (<kbd>Ctrl+K Ctrl+F</kbd>) are active in both native LSP mode and fallback mode.
+- **Range Formatting Context Invariant**: Range formatting evaluates document context from line 0 down to determine the exact nesting level and stream continuation state, but produces surgical line edits restricted strictly to the user's selected line range.
 - **Configuration Hierarchy**:
   1. Workspace or project `.prettierrc` configuration file resolved via `prettier.resolveConfig(document.uri.fsPath)`.
   2. VS Code active formatting options (`options.tabSize` and `options.insertSpaces`).
