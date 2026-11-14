@@ -22,6 +22,11 @@ Comprehensive language support and Language Server for **[Stride](https://github
   - Auto-closing pairs and surrounding pairs for braces, brackets, parentheses, and quotes.
   - Context-aware indentation for blocks and property lists.
   - Code folding for bracket blocks and `#region` / `#endregion` markers.
+- **Code Formatting & Automatic Cleanup (Bundled Prettier)**:
+  - Unified indentation, bracket alignment, and structural formatting for `.stride` files.
+  - Automatic continuation indentation for multi-line stream pipelines (`>>`) and embedded reactions.
+  - Bundled directly inside the extension—no external Node.js runtime or CLI tool installation required.
+  - Full support for `Format Document`, `editor.formatOnSave`, and VS Code automatic file cleanup settings.
 - **Code Snippets**:
   - `domain`: Scaffold a `_domainDefinition`.
   - `module`: Complete module template with ports, blocks, and stream connections.
@@ -30,6 +35,46 @@ Comprehensive language support and Language Server for **[Stride](https://github
   - `statemachine` / `state` / `transition`: Declarative hierarchical state machine definitions.
   - `platformModule`: Low-level LLVM IR binding blocks.
   - `signal` / `switch`: Variable declarations.
+
+---
+
+## Code Formatting & Automatic Cleanup on Save
+
+The extension bundles a dedicated code formatting engine powered by **[Prettier](https://prettier.io/)**. It ensures unified indentation, clean bracket alignments, and consistent structural layout across all `.stride` files without requiring users to install Node.js or any external formatting tools.
+
+### 1. Manual Formatting
+- **Keyboard Shortcut**: Press **`Shift+Alt+F`** (Windows/Linux) or **`Shift+Option+F`** (macOS).
+- **Command Palette**: Run `Format Document` (`Ctrl+Shift+P` / `Cmd+Shift+P`).
+- **Context Menu**: Right-click anywhere in an open `.stride` file and select **Format Document**.
+
+### 2. Automatic Formatting & Cleanup on Save
+To automatically format and clean up Stride files whenever you save them, configure VS Code's `settings.json` (User settings or Workspace `.vscode/settings.json`):
+
+```json
+{
+    // Enable automatic formatting on save specifically for Stride files
+    "[stride]": {
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "StrideLang.stride-language"
+    },
+
+    // Automatic file cleanup on save
+    "files.trimTrailingWhitespace": true,
+    "files.insertFinalNewline": true,
+    "files.trimFinalNewlines": true
+}
+```
+
+#### What Each Setting Does:
+- **`editor.formatOnSave`**: Automatically invokes the Stride formatting engine every time you save a `.stride` file (`Ctrl+S` / `Cmd+S`).
+- **`editor.defaultFormatter`**: Ensures `Stride Language` is selected as the active formatter when multiple formatting extensions are installed.
+- **`files.trimTrailingWhitespace`**: Automatically strips redundant spaces and tabs from the end of every line upon save.
+- **`files.insertFinalNewline`**: Ensures every saved file ends with a clean single trailing newline (POSIX compliant).
+- **`files.trimFinalNewlines`**: Strips extra blank lines at the end of the file.
+
+> [!TIP]
+> **Customizing Indentation & Prettier Options**:
+> The formatter respects your active VS Code indentation settings (`editor.tabSize` and `editor.insertSpaces`). If your workspace contains a `.prettierrc` configuration file, the formatter will also automatically detect and apply project-level Prettier rules (such as `tabWidth`, `useTabs`, and `printWidth`).
 
 ---
 

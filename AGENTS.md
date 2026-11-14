@@ -35,7 +35,8 @@ vscode-stride-lang/
 ├── snippets/              # Snippets for Stride declarations and templates
 │   └── stride.json
 ├── src/                   # TypeScript extension implementation
-│   └── extension.ts       # Client lifecycle, fallback providers, AST cache
+│   ├── extension.ts       # Client lifecycle, fallback providers, AST cache
+│   └── formatter.ts       # Bundled Prettier Doc printer formatting provider
 ├── strideroot/            # Bundled fallback standard library definitions
 │   ├── Core.stride
 │   ├── Math.stride
@@ -129,7 +130,28 @@ When finding executables (`stridec.exe`, `stridetest.exe`):
 
 ---
 
-## 8. Build, Test, and Packaging Instructions
+## 8. Document Formatting Architecture (Bundled Prettier)
+
+The extension bundles a dedicated code formatting engine implemented in [`src/formatter.ts`](file:///c:/Users/Andres/source/repos/vscode-stride-lang/src/formatter.ts) using the **Prettier Doc Engine** (`prettier.doc.builders` and `prettier.doc.printer.printDocToString`).
+
+### Features & Formatting Invariants
+- **Zero-Setup Turnkey Engine**: Prettier is bundled directly within the extension package. End-users do not require Node.js, npm, or any external formatting binaries.
+- **Provider Registration**: Registered unconditionally in `activate()` via `languages.registerDocumentFormattingEditProvider({ scheme: 'file', language: 'stride' }, ...)` to ensure formatting is active in both native LSP mode and fallback mode.
+- **Configuration Hierarchy**:
+  1. Workspace or project `.prettierrc` configuration file resolved via `prettier.resolveConfig(document.uri.fsPath)`.
+  2. VS Code active formatting options (`options.tabSize` and `options.insertSpaces`).
+- **Syntax Masking**: Comments (`#`, `//`, `/* ... */`) and strings (`"..."`, `'...'`) are masked prior to bracket counting to prevent unbalanced braces inside literals from corrupting indentation.
+- **Stream Continuation Indentation**:
+  - Multi-line streams split across lines (lines starting with `>>` or following an uncompleted stream without a terminating semicolon `;`) receive an automatic continuation indent (+1 level).
+  - Blocks opened on continuation lines (such as `>> reaction { ... }`) maintain their relative nesting depth (+1 level above the reaction head).
+  - Continuation indent terminates automatically upon encountering `;` at or above the stream base indent.
+- **Cleanup on Save**:
+  - Automatically compatible with VS Code's `editor.formatOnSave`.
+  - Supports `files.trimTrailingWhitespace`, `files.insertFinalNewline` (POSIX trailing newline), and `files.trimFinalNewlines`.
+
+---
+
+## 9. Build, Test, and Packaging Instructions
 
 ### TypeScript Extension Build
 ```powershell

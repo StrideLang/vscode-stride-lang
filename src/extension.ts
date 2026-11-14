@@ -47,6 +47,7 @@ import {
     CloseAction,
     ErrorAction
 } from 'vscode-languageclient/node';
+import { provideDocumentFormattingEdits } from './formatter';
 
 let client: LanguageClient | undefined;
 let extensionContext: ExtensionContext | undefined;
@@ -2408,6 +2409,340 @@ function getRelatedStrideFiles(document: TextDocument): string[] {
     return Array.from(relatedFiles);
 }
 
+function resolveImportPaths(target: string, documentOrPath: TextDocument | string): string[] {
+    const cleanTarget = target.replace(/['"]/g, '').trim();
+    if (!cleanTarget) return [];
+    const results = new Set<string>();
+
+    // 1. Single file match from resolveImportFile
+    const singleFile = resolveImportFile(cleanTarget, documentOrPath);
+    if (singleFile) {
+        results.add(path.normalize(singleFile));
+    }
+
+    // 2. Check if cleanTarget is a directory or package in docDir, workspace folders, or Stride roots
+    const currentPath = typeof documentOrPath === 'string'
+        ? path.normalize(documentOrPath)
+        : (documentOrPath.uri && documentOrPath.uri.scheme === 'file' && documentOrPath.uri.fsPath)
+            ? path.normalize(documentOrPath.uri.fsPath)
+            : undefined;
+    const docDir = currentPath ? path.dirname(currentPath) : undefined;
+    const subPath = cleanTarget.replace(/\./g, path.sep);
+
+    const checkDirForStrideFiles = (dir: string) => {
+        try {
+            if (fs.existsSync(dir) && fs.statSync(dir).isDirectory()) {
+                const entries = fs.readdirSync(dir, { withFileTypes: true });
+                for (const entry of entries) {
+                    if (entry.isFile() && entry.name.endsWith('.stride')) {
+                        results.add(path.normalize(path.join(dir, entry.name)));
+                    }
+                }
+            }
+        } catch (e) {}
+    };
+
+    if (docDir) {
+        checkDirForStrideFiles(path.join(docDir, cleanTarget));
+        checkDirForStrideFiles(path.join(docDir, subPath));
+    }
+
+    if (workspace.workspaceFolders) {
+        for (const wf of workspace.workspaceFolders) {
+            checkDirForStrideFiles(path.join(wf.uri.fsPath, cleanTarget));
+            checkDirForStrideFiles(path.join(wf.uri.fsPath, subPath));
+        }
+    }
+
+    for (const rootDir of getStrideRootDirs()) {
+        checkDirForStrideFiles(path.join(rootDir, cleanTarget));
+        checkDirForStrideFiles(path.join(rootDir, subPath));
+        checkDirForStrideFiles(path.join(rootDir, 'library', cleanTarget));
+        checkDirForStrideFiles(path.join(rootDir, 'library', '1.0', cleanTarget));
+        checkDirForStrideFiles(path.join(rootDir, 'library', subPath));
+        checkDirForStrideFiles(path.join(rootDir, 'library', '1.0', subPath));
+    }
+
+    // 3. Check indexed library files for package prefix
+    const libFiles = getLibraryFiles();
+    const targetLower = cleanTarget.toLowerCase();
+    for (const libPath of libFiles) {
+        const norm = path.normalize(libPath).toLowerCase();
+        if (norm.includes(path.sep + targetLower + path.sep)) {
+            results.add(path.normalize(libPath));
+        }
+    }
+
+    return Array.from(results);
+}
+
+interface NamespaceInfo {
+    name: string;
+    kind: 'import' | 'feature' | 'domain' | 'module';
+    importTarget?: string;
+    targetFiles: string[];
+    importLine?: number;
+    featureDecl?: ScopeDeclaration;
+    featureVariants?: string[];
+    domainDecl?: ScopeDeclaration;
+}
+
+function resolveNamespace(nsName: string, document: TextDocument): NamespaceInfo | undefined {
+    const text = document.getText();
+    const lines = text.split(/\r?\n/);
+
+    // 1. Check for `import ... as <nsName>` or `use ... as <nsName>` in current document
+    const aliasRegex = /^\s*(?:import|use)\s+(?:(["'])(.*?)\1|([_a-zA-Z0-9./\\]+))(?:\s+version\s+[^as\n\r]+)?\s+as\s+([_a-zA-Z0-9]+)\b/;
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const m = aliasRegex.exec(line);
+        if (m && m[4] === nsName) {
+            const impTarget = m[2] || m[3];
+            const files = resolveImportPaths(impTarget, document);
+            return {
+                name: nsName,
+                kind: 'import',
+                importTarget: impTarget,
+                targetFiles: files,
+                importLine: i + 1
+            };
+        }
+    }
+
+    // 2. Check for direct `import <nsName>` or `use <nsName>`
+    const directRegex = /^\s*(?:import|use)\s+(?:(["'])(.*?)\1|([_a-zA-Z0-9./\\]+))/;
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const m = directRegex.exec(line);
+        if (m) {
+            const impTarget = m[2] || m[3];
+            const baseTarget = path.basename(impTarget, '.stride');
+            if (baseTarget.toLowerCase() === nsName.toLowerCase() || impTarget.toLowerCase() === nsName.toLowerCase()) {
+                const files = resolveImportPaths(impTarget, document);
+                return {
+                    name: nsName,
+                    kind: 'import',
+                    importTarget: impTarget,
+                    targetFiles: files,
+                    importLine: i + 1
+                };
+            }
+        }
+    }
+
+    // 3. Check if nsName is a `feature` declared in the document or related files
+    const { scopeTree: rootScope } = getCachedDocData(document);
+    for (const [name, decl] of rootScope.declarations.entries()) {
+        if (name === nsName && decl.kind === 'feature') {
+            return {
+                name: nsName,
+                kind: 'feature',
+                targetFiles: [],
+                featureDecl: decl,
+                featureVariants: decl.variants || []
+            };
+        }
+    }
+
+    // 4. Check if nsName is a domain or module in rootScope
+    if (rootScope.declarations.has(nsName)) {
+        const decl = rootScope.declarations.get(nsName)!;
+        if (decl.kind.includes('domain') || decl.kind === 'module') {
+            return {
+                name: nsName,
+                kind: decl.kind.includes('domain') ? 'domain' : 'module',
+                targetFiles: [],
+                domainDecl: decl
+            };
+        }
+    }
+
+    // 5. Check if nsName matches an available library or workspace module/package directly
+    const directFiles = resolveImportPaths(nsName, document);
+    if (directFiles.length > 0) {
+        return {
+            name: nsName,
+            kind: 'import',
+            importTarget: nsName,
+            targetFiles: directFiles
+        };
+    }
+
+    return undefined;
+}
+
+function getNamespaceCompletions(document: TextDocument, nsName: string, memberPrefix: string): CompletionItem[] | undefined {
+    const nsInfo = resolveNamespace(nsName, document);
+    if (!nsInfo) return undefined;
+
+    const items: CompletionItem[] = [];
+    const seen = new Set<string>();
+
+    const addComp = (label: string, kind: CompletionItemKind, detail?: string, doc?: string) => {
+        if (!label || seen.has(label)) return;
+        seen.add(label);
+        const item = new CompletionItem(label, kind);
+        if (detail) item.detail = detail;
+        if (doc) item.documentation = new MarkdownString(doc);
+        items.push(item);
+    };
+
+    if (nsInfo.kind === 'feature' && nsInfo.featureVariants) {
+        for (const v of nsInfo.featureVariants) {
+            addComp(v, CompletionItemKind.EnumMember, `Variant of feature \`${nsName}\``, `Feature variant \`${nsName}::${v}\``);
+        }
+        return items;
+    }
+
+    if (nsInfo.kind === 'domain' && nsInfo.domainDecl) {
+        const decl = nsInfo.domainDecl;
+        if (decl.body) {
+            const innerDecls = parseDeclarationsFromBlock(decl.body, decl.line, document.uri.fsPath);
+            for (const d of innerDecls) {
+                let k = CompletionItemKind.Variable;
+                if (d.kind.includes('Port') || d.kind === 'port') k = CompletionItemKind.Interface;
+                addComp(d.name, k, `${d.signature} (${nsName})`, d.meta);
+            }
+        }
+        return items;
+    }
+
+    if (nsInfo.targetFiles && nsInfo.targetFiles.length > 0) {
+        for (const f of nsInfo.targetFiles) {
+            const content = getStrideFileContent(f);
+            if (!content) continue;
+            const baseName = path.basename(f);
+
+            // 1. Declarations from scope tree
+            const scope = parseScopeTree(content, f);
+            for (const [dName, decl] of scope.declarations.entries()) {
+                let k = CompletionItemKind.Variable;
+                if (decl.kind === 'module' || decl.kind === 'reaction' || decl.kind === 'loop') k = CompletionItemKind.Function;
+                else if (decl.kind === 'constant') k = CompletionItemKind.Constant;
+                else if (decl.kind === 'state' || decl.kind === 'transition') k = CompletionItemKind.Struct;
+                else if (decl.kind === 'type' || decl.kind.includes('domain')) k = CompletionItemKind.Class;
+                else if (decl.kind.includes('Port') || decl.kind === 'port') k = CompletionItemKind.Interface;
+                else if (decl.kind === 'variant') k = CompletionItemKind.EnumMember;
+                addComp(dName, k, `${decl.signature} (${baseName})`, decl.meta);
+            }
+
+            // 2. Library symbols
+            const symbols = parseLibrarySymbols(content, f);
+            for (const sym of symbols) {
+                let k = CompletionItemKind.Function;
+                if (sym.kind === 'signal' || sym.kind === 'switch' || sym.kind === 'trigger') k = CompletionItemKind.Variable;
+                else if (sym.kind === 'constant') k = CompletionItemKind.Constant;
+                else if (sym.kind === 'state' || sym.kind === 'transition') k = CompletionItemKind.Struct;
+                addComp(sym.name, k, `${sym.signature} (${baseName})`, sym.meta);
+            }
+
+            // 3. Types
+            const types = parseTypesFromText(content, f);
+            for (const t of types) {
+                addComp(t.name, CompletionItemKind.Class, `Type ${t.name} (${baseName})`, t.meta);
+            }
+        }
+        return items;
+    }
+
+    return items.length > 0 ? items : undefined;
+}
+
+function getImportCompletions(document: TextDocument, linePrefix: string, match: RegExpExecArray): CompletionItem[] {
+    const items: CompletionItem[] = [];
+    const seen = new Set<string>();
+
+    const addModule = (modName: string, detail: string, filePath?: string, isFile?: boolean) => {
+        if (!modName || seen.has(modName)) return;
+        seen.add(modName);
+        const item = new CompletionItem(modName, isFile ? CompletionItemKind.File : CompletionItemKind.Module);
+        item.detail = detail;
+        if (filePath && fs.existsSync(filePath)) {
+            try {
+                const stat = fs.statSync(filePath);
+                if (stat.isFile()) {
+                    const content = fs.readFileSync(filePath, 'utf8').substring(0, 500);
+                    const metaMatch = /meta:\s*["']([^"']+)["']/.exec(content);
+                    if (metaMatch) {
+                        item.documentation = new MarkdownString(metaMatch[1]);
+                    } else {
+                        item.documentation = new MarkdownString(`File: \`${path.basename(filePath)}\``);
+                    }
+                }
+            } catch (e) {}
+        }
+        items.push(item);
+    };
+
+    // 1. Standard Library Modules & Packages
+    for (const libPath of getLibraryFiles()) {
+        const baseName = path.basename(libPath, '.stride');
+        addModule(baseName, 'Stride Standard Library', libPath);
+
+        // Check package directory relative to library root
+        for (const rootDir of getStrideRootDirs()) {
+            const rel = path.relative(path.join(rootDir, 'library', '1.0'), libPath);
+            if (!rel.startsWith('..') && rel.includes(path.sep)) {
+                const pkgPath = rel.replace(/\\/g, '/').replace(/\.stride$/, '');
+                addModule(pkgPath, 'Stride Standard Library Package', libPath, true);
+            }
+        }
+    }
+
+    // 2. Local sibling files and subdirectories
+    if (document.uri && document.uri.scheme === 'file') {
+        const docDir = path.dirname(document.uri.fsPath);
+        try {
+            if (fs.existsSync(docDir)) {
+                const entries = fs.readdirSync(docDir, { withFileTypes: true });
+                for (const entry of entries) {
+                    if (entry.isFile() && entry.name.endsWith('.stride') && path.join(docDir, entry.name) !== document.uri.fsPath) {
+                        const bName = path.basename(entry.name, '.stride');
+                        addModule(bName, 'Local Module', path.join(docDir, entry.name));
+                    } else if (entry.isDirectory() && entry.name !== '.git' && entry.name !== 'node_modules' && entry.name !== 'build' && entry.name !== 'out') {
+                        const subDir = path.join(docDir, entry.name);
+                        try {
+                            const subEntries = fs.readdirSync(subDir, { withFileTypes: true });
+                            for (const sub of subEntries) {
+                                if (sub.isFile() && sub.name.endsWith('.stride')) {
+                                    const subRel = `${entry.name}/${path.basename(sub.name, '.stride')}`;
+                                    addModule(subRel, 'Local Subdirectory Module', path.join(subDir, sub.name), true);
+                                }
+                            }
+                        } catch (e) {}
+                    }
+                }
+            }
+        } catch (e) {}
+    }
+
+    // 3. Workspace folders
+    if (workspace.workspaceFolders) {
+        for (const wf of workspace.workspaceFolders) {
+            const wfDir = wf.uri.fsPath;
+            try {
+                if (fs.existsSync(wfDir)) {
+                    const entries = fs.readdirSync(wfDir, { withFileTypes: true });
+                    for (const entry of entries) {
+                        if (entry.isFile() && entry.name.endsWith('.stride')) {
+                            const bName = path.basename(entry.name, '.stride');
+                            addModule(bName, 'Workspace Module', path.join(wfDir, entry.name));
+                        }
+                    }
+                }
+            } catch (e) {}
+        }
+    }
+
+    // 4. Built-in platform / domain modules commonly used in `use` statements
+    const platformModules = ['DesktopAudio', 'RtAudio', 'PufferFish', 'Gamma'];
+    for (const pm of platformModules) {
+        addModule(pm, 'Stride Platform / Domain Framework');
+    }
+
+    return items;
+}
+
 function buildAllTypes(document: TextDocument, preMaskedText?: string): Map<string, TypeInfo> {
     const baseTypes = getLibraryTypes();
     const typeMap = new Map<string, TypeInfo>(baseTypes);
@@ -3219,6 +3554,77 @@ function registerFallbackProviders(context: ExtensionContext) {
                 }
             }
 
+            // Namespace member hover (Namespace::member):
+            const nsMemberMatch = /([_a-zA-Z0-9]+)::\s*$/.exec(beforeWord);
+            if (nsMemberMatch) {
+                const nsName = nsMemberMatch[1];
+                const nsInfo = resolveNamespace(nsName, document);
+                if (nsInfo) {
+                    if (nsInfo.kind === 'feature' && nsInfo.featureVariants) {
+                        if (nsInfo.featureVariants.includes(word)) {
+                            return createCompactHover(`variant ${word}`, `**Variant**: \`${nsName}::${word}\`\n\nVariant of feature \`${nsName}\``);
+                        }
+                    }
+                    if (nsInfo.targetFiles && nsInfo.targetFiles.length > 0) {
+                        for (const f of nsInfo.targetFiles) {
+                            const content = getStrideFileContent(f);
+                            if (!content) continue;
+                            const scope = parseScopeTree(content, f);
+                            const decl = scope.declarations.get(word);
+                            if (decl) {
+                                let body = `**${decl.kind}**: \`${nsName}::${word}\`\n\n`;
+                                if (decl.meta) body += `*${decl.meta}*\n\n`;
+                                body += `📍 Declared in ${formatClickableLink(f, decl.line)}`;
+                                return createCompactHover(`${decl.kind} ${decl.signature || word}`, body);
+                            }
+                            const symbols = parseLibrarySymbols(content, f);
+                            const sym = symbols.find(s => s.name === word);
+                            if (sym) {
+                                let body = `**${sym.kind}**: \`${nsName}::${word}\`\n\n`;
+                                if (sym.meta) body += `*${sym.meta}*\n\n`;
+                                body += `📍 Declared in ${formatClickableLink(f, sym.line)}`;
+                                return createCompactHover(`${sym.kind} ${sym.signature || word}`, body);
+                            }
+                            const types = parseTypesFromText(content, f);
+                            const t = types.find(type => type.name === word);
+                            if (t) {
+                                let body = `**Type**: \`${nsName}::${word}\`\n\n`;
+                                if (t.meta) body += `*${t.meta}*\n\n`;
+                                body += `📍 Defined in ${formatClickableLink(f, t.line || 1)}`;
+                                return createCompactHover(`type ${word}`, body);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Namespace identifier hover (hovering on `Namespace` before `::`):
+            if (afterWord.startsWith('::')) {
+                const nsInfo = resolveNamespace(word, document);
+                if (nsInfo) {
+                    if (nsInfo.kind === 'feature') {
+                        const variantsStr = (nsInfo.featureVariants || []).map(v => `\`${v}\``).join(', ');
+                        let body = `**Feature**: \`${word}\`\n\n`;
+                        if (nsInfo.featureDecl?.meta) body += `*${nsInfo.featureDecl.meta}*\n\n`;
+                        if (variantsStr) body += `- **Variants**: ${variantsStr}\n`;
+                        return createCompactHover(`feature ${word}`, body);
+                    }
+                    if (nsInfo.kind === 'import') {
+                        let body = `**Namespace / Module**: \`${word}\`\n\n`;
+                        if (nsInfo.importTarget && nsInfo.importTarget !== word) {
+                            body += `- **Aliased Target**: \`${nsInfo.importTarget}\`\n`;
+                        }
+                        if (nsInfo.targetFiles && nsInfo.targetFiles.length > 0) {
+                            body += `- **Resolved Files**:\n` + nsInfo.targetFiles.map(f => `  - ${formatClickableLink(f, 1)}`).join('\n') + '\n';
+                        }
+                        return createCompactHover(`namespace ${word}`, body);
+                    }
+                    if (nsInfo.kind === 'domain') {
+                        return createCompactHover(`domain ${word}`, `**Domain**: \`${word}\`\n\nCoordinated execution domain.`);
+                    }
+                }
+            }
+
             // 1. If followed by a colon, check if inside a function/action invocation first (e.g. Place(supply: ...))
             if (isFollowedByColon) {
                 const beforeWord = lineText.substring(0, wordRange.start.character);
@@ -3521,6 +3927,59 @@ function registerFallbackProviders(context: ExtensionContext) {
                 }
             }
 
+            // Namespace member definition (Namespace::member):
+            const nsMemberMatch = /([_a-zA-Z0-9]+)::\s*$/.exec(beforeWord);
+            if (nsMemberMatch) {
+                const nsName = nsMemberMatch[1];
+                const nsInfo = resolveNamespace(nsName, document);
+                if (nsInfo) {
+                    if (nsInfo.kind === 'feature' && nsInfo.featureDecl) {
+                        return new Location(document.uri, new Position(Math.max(0, nsInfo.featureDecl.line - 1), 0));
+                    }
+                    if (nsInfo.targetFiles && nsInfo.targetFiles.length > 0) {
+                        for (const f of nsInfo.targetFiles) {
+                            const content = getStrideFileContent(f);
+                            if (!content) continue;
+                            const scope = parseScopeTree(content, f);
+                            const decl = scope.declarations.get(word);
+                            if (decl) {
+                                return new Location(Uri.file(f), new Position(Math.max(0, decl.line - 1), 0));
+                            }
+                            const symbols = parseLibrarySymbols(content, f);
+                            const sym = symbols.find(s => s.name === word);
+                            if (sym) {
+                                return new Location(Uri.file(f), new Position(Math.max(0, sym.line - 1), 0));
+                            }
+                            const types = parseTypesFromText(content, f);
+                            const t = types.find(type => type.name === word);
+                            if (t && t.filePath) {
+                                return new Location(Uri.file(t.filePath), new Position(Math.max(0, (t.line || 1) - 1), 0));
+                            }
+                            if (path.basename(f, '.stride').toLowerCase() === word.toLowerCase()) {
+                                return new Location(Uri.file(f), new Position(0, 0));
+                            }
+                        }
+                        return new Location(Uri.file(nsInfo.targetFiles[0]), new Position(0, 0));
+                    }
+                }
+            }
+
+            // Namespace identifier definition (clicking on `Namespace` before `::`):
+            if (afterWord.startsWith('::')) {
+                const nsInfo = resolveNamespace(word, document);
+                if (nsInfo) {
+                    if (nsInfo.importLine) {
+                        return new Location(document.uri, new Position(nsInfo.importLine - 1, 0));
+                    }
+                    if (nsInfo.kind === 'feature' && nsInfo.featureDecl) {
+                        return new Location(document.uri, new Position(Math.max(0, nsInfo.featureDecl.line - 1), 0));
+                    }
+                    if (nsInfo.targetFiles && nsInfo.targetFiles.length > 0) {
+                        return new Location(Uri.file(nsInfo.targetFiles[0]), new Position(0, 0));
+                    }
+                }
+            }
+
             // 1. If followed by a colon, check if inside a function/action invocation first
             if (isFollowedByColon) {
                 const beforeWord = lineText.substring(0, wordRange.start.character);
@@ -3786,6 +4245,26 @@ function registerFallbackProviders(context: ExtensionContext) {
 
     const completionProvider: CompletionItemProvider = {
         provideCompletionItems(document: TextDocument, position: Position): CompletionItem[] | undefined {
+            const lineText = document.lineAt(position.line).text;
+            const linePrefix = lineText.substring(0, position.character);
+
+            // 1. Check for import / use autocompletion FIRST (bypasses string check for import "...")
+            const importMatch = /^\s*(?:import|use)\s+(?:(["'])([^"']*)|([_a-zA-Z0-9./\\]*))$/i.exec(linePrefix);
+            if (importMatch && !linePrefix.includes('#')) {
+                return getImportCompletions(document, linePrefix, importMatch);
+            }
+
+            // 2. Check for namespace autocompletion (e.g. Ns::, Generators::, Feature::)
+            const nsMatch = /([_a-zA-Z0-9]+)::\s*([_a-zA-Z0-9]*)$/.exec(linePrefix);
+            if (nsMatch) {
+                const nsName = nsMatch[1];
+                const memberPrefix = nsMatch[2];
+                const nsItems = getNamespaceCompletions(document, nsName, memberPrefix);
+                if (nsItems && nsItems.length > 0) {
+                    return nsItems;
+                }
+            }
+
             const charOffset = document.offsetAt(position);
             if (isOffsetInCommentOrString(document.getText(), charOffset)) {
                 return undefined;
@@ -3795,7 +4274,6 @@ function registerFallbackProviders(context: ExtensionContext) {
             const allTypes = getAllTypes(document);
             const allSymbols = getAllLibrarySymbols(document);
 
-            const linePrefix = document.lineAt(position.line).text.substring(0, position.character);
             const dotMatch = /([_a-zA-Z0-9]+)\.\s*([_a-zA-Z0-9]*)$/.exec(linePrefix);
             if (dotMatch) {
                 const entityName = dotMatch[1];
@@ -4542,7 +5020,7 @@ function registerFallbackProviders(context: ExtensionContext) {
             semanticTokensProvider,
             semanticTokensLegend
         ),
-        languages.registerCompletionItemProvider({ scheme: 'file', language: 'stride' }, completionProvider, '.', ':', '>')
+        languages.registerCompletionItemProvider({ scheme: 'file', language: 'stride' }, completionProvider, '.', ':', '>', '/', '\\', '"', '\'')
     );
 }
 
@@ -4922,6 +5400,14 @@ export async function activate(context: ExtensionContext) {
 
     // Register F5 debugging and compilation commands
     registerDebugAndExecutionCommands(context);
+
+    // Register document formatting provider (powered by Prettier)
+    context.subscriptions.push(
+        languages.registerDocumentFormattingEditProvider(
+            { scheme: 'file', language: 'stride' },
+            { provideDocumentFormattingEdits }
+        )
+    );
 
     const serverExecutable = findServerBinary(context);
 

@@ -244,6 +244,9 @@ struct TokenAtPosition {
     bool precededByDot = false;
     bool followedByDot = false;
     std::string dotTargetEntity;
+    bool precededByDoubleColon = false;
+    bool followedByDoubleColon = false;
+    std::string nsTargetEntity;
 };
 
 TokenAtPosition getTokenAtPosition(const std::string &content, int line, int character) {
@@ -277,7 +280,9 @@ TokenAtPosition getTokenAtPosition(const std::string &content, int line, int cha
                 while (after < (int)lineStr.size() && (lineStr[after] == ' ' || lineStr[after] == '\t')) {
                     after++;
                 }
-                if (after < (int)lineStr.size() && lineStr[after] == ':') {
+                if (after + 1 < (int)lineStr.size() && lineStr[after] == ':' && lineStr[after + 1] == ':') {
+                    res.followedByDoubleColon = true;
+                } else if (after < (int)lineStr.size() && lineStr[after] == ':') {
                     res.followedByColon = true;
                 }
                 if (after < (int)lineStr.size() && lineStr[after] == '.') {
@@ -287,7 +292,20 @@ TokenAtPosition getTokenAtPosition(const std::string &content, int line, int cha
                 while (before >= 0 && (lineStr[before] == ' ' || lineStr[before] == '\t')) {
                     before--;
                 }
-                if (before >= 0 && lineStr[before] == '.') {
+                if (before >= 1 && lineStr[before] == ':' && lineStr[before - 1] == ':') {
+                    res.precededByDoubleColon = true;
+                    int nsEnd = before - 1;
+                    while (nsEnd > 0 && (lineStr[nsEnd - 1] == ' ' || lineStr[nsEnd - 1] == '\t')) {
+                        nsEnd--;
+                    }
+                    int nsStart = nsEnd;
+                    while (nsStart > 0 && (isalnum((unsigned char)lineStr[nsStart - 1]) || lineStr[nsStart - 1] == '_' || lineStr[nsStart - 1] == '@')) {
+                        nsStart--;
+                    }
+                    if (nsStart < nsEnd) {
+                        res.nsTargetEntity = lineStr.substr(nsStart, nsEnd - nsStart);
+                    }
+                } else if (before >= 0 && lineStr[before] == '.') {
                     res.precededByDot = true;
                     int entEnd = before;
                     while (entEnd > 0 && (lineStr[entEnd - 1] == ' ' || lineStr[entEnd - 1] == '\t')) {
@@ -1688,6 +1706,44 @@ void handleHover(const std::string &id, const std::string &uri, int line, int ch
                 if (hoverText.empty()) {
                     hoverText = renderPropertyHover(token, tokenInfo.dotTargetEntity, scopeStack, it->second.tree, it->second.importedTree, uri);
                 }
+            } else if (tokenInfo.precededByDoubleColon && !tokenInfo.nsTargetEntity.empty()) {
+                auto symDecl = findSymbolOrType(token, scopeStack, it->second.tree, it->second.importedTree);
+                if (symDecl) {
+                    std::ostringstream md;
+                    md << "**" << symDecl->getEntityType() << "**: `" << tokenInfo.nsTargetEntity << "::" << token << "`\n\n";
+                    std::string meta = extractMetaDoc(symDecl);
+                    if (!meta.empty()) md << "*" << meta << "*\n\n";
+                    hoverText = md.str();
+                } else {
+                    if (it->second.tree) {
+                        for (const auto &child : it->second.tree->getChildren()) {
+                            auto d = std::dynamic_pointer_cast<DeclarationNode>(child);
+                            if (d && d->getName() == tokenInfo.nsTargetEntity && d->getEntityType() == "feature") {
+                                hoverText = "**Variant**: `" + tokenInfo.nsTargetEntity + "::" + token + "`\n\nVariant of feature `" + tokenInfo.nsTargetEntity + "`";
+                                break;
+                            }
+                        }
+                    }
+                }
+            } else if (tokenInfo.followedByDoubleColon) {
+                bool isFeature = false;
+                if (it->second.tree) {
+                    for (const auto &child : it->second.tree->getChildren()) {
+                        auto d = std::dynamic_pointer_cast<DeclarationNode>(child);
+                        if (d && d->getName() == token && d->getEntityType() == "feature") {
+                            isFeature = true;
+                            std::ostringstream md;
+                            md << "**Feature**: `" << token << "`\n\n";
+                            std::string meta = extractMetaDoc(d);
+                            if (!meta.empty()) md << "*" << meta << "*\n\n";
+                            hoverText = md.str();
+                            break;
+                        }
+                    }
+                }
+                if (!isFeature) {
+                    hoverText = "**Namespace / Module**: `" + token + "`";
+                }
             } else if (tokenInfo.followedByColon) {
                 // Property key resolution (AGENTS.md Rule 5)
                 EnclosingDeclarationInfo encInfo = getEnclosingDeclarationInfo(it->second.text, line, character, it->second.tree);
@@ -2006,6 +2062,201 @@ void handleCompletion(const std::string &id, const std::string &uri = "", int li
         items.push_back({label, kind, detail, doc});
     };
 
+    auto sendItems = [&]() {
+        std::ostringstream json;
+        json << "{\"jsonrpc\":\"2.0\",\"id\":" << id << ",\"result\":{\"isIncomplete\":false,\"items\":[";
+        for (size_t i = 0; i < items.size(); i++) {
+            if (i > 0) json << ",";
+            const auto &item = items[i];
+            json << "{\"label\":\"" << escapeJson(item.label) << "\",\"kind\":" << item.kind;
+            if (!item.detail.empty()) {
+                json << ",\"detail\":\"" << escapeJson(item.detail) << "\"";
+            }
+            if (!item.doc.empty()) {
+                json << ",\"documentation\":{\"kind\":\"markdown\",\"value\":\"" << escapeJson(item.doc) << "\"}";
+            }
+            json << "}";
+        }
+        json << "]}}";
+        sendLspResponse(json.str());
+    };
+
+    std::string linePrefix = "";
+    auto itDoc = openDocuments.find(uri);
+    if (itDoc != openDocuments.end()) {
+        std::istringstream iss(itDoc->second.text);
+        std::string curLine;
+        int curLineIdx = 0;
+        while (std::getline(iss, curLine)) {
+            if (curLineIdx == line) {
+                if (!curLine.empty() && curLine.back() == '\r') curLine.pop_back();
+                if (character >= 0 && character <= (int)curLine.size()) {
+                    linePrefix = curLine.substr(0, character);
+                } else {
+                    linePrefix = curLine;
+                }
+                break;
+            }
+            curLineIdx++;
+        }
+    }
+
+    // 1. Check Import / Use completion
+    std::regex importRegex(R"(^\s*(?:import|use)\s+(?:(["'])([^"']*)|([_a-zA-Z0-9./\\]*))$)", std::regex::icase);
+    std::smatch importMatch;
+    if (!linePrefix.empty() && linePrefix.find('#') == std::string::npos && std::regex_search(linePrefix, importMatch, importRegex)) {
+        std::string currentPath = uriToPath(uri);
+        std::filesystem::path curDir = std::filesystem::path(currentPath).parent_path();
+        
+        if (!curDir.empty() && std::filesystem::exists(curDir)) {
+            for (const auto &entry : std::filesystem::directory_iterator(curDir)) {
+                if (entry.is_regular_file() && entry.path().extension() == ".stride") {
+                    addItem(entry.path().stem().string(), 17, "Local Module");
+                } else if (entry.is_directory()) {
+                    std::string dName = entry.path().filename().string();
+                    if (dName != ".git" && dName != "build" && dName != "out") {
+                        for (const auto &sub : std::filesystem::directory_iterator(entry.path())) {
+                            if (sub.is_regular_file() && sub.path().extension() == ".stride") {
+                                addItem(dName + "/" + sub.path().stem().string(), 17, "Local Subdirectory Module");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        std::string sRoot = findStrideRoot(uri);
+        if (!sRoot.empty()) {
+            std::vector<std::filesystem::path> libDirs = {
+                std::filesystem::path(sRoot),
+                std::filesystem::path(sRoot) / "library" / "1.0"
+            };
+            for (const auto &ld : libDirs) {
+                if (std::filesystem::exists(ld)) {
+                    for (const auto &entry : std::filesystem::recursive_directory_iterator(ld)) {
+                        if (entry.is_regular_file() && entry.path().extension() == ".stride") {
+                            addItem(entry.path().stem().string(), 9, "Standard Library Module");
+                            std::error_code ec;
+                            auto rel = std::filesystem::relative(entry.path(), ld, ec);
+                            if (!ec && rel.string().find(std::filesystem::path::preferred_separator) != std::string::npos) {
+                                std::string relStr = rel.generic_string();
+                                if (relStr.size() > 7 && relStr.rfind(".stride") == relStr.size() - 7) {
+                                    relStr = relStr.substr(0, relStr.size() - 7);
+                                }
+                                addItem(relStr, 9, "Standard Library Package");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        for (const auto &p : {"DesktopAudio", "RtAudio", "PufferFish", "Gamma"}) {
+            addItem(p, 9, "Stride Platform Framework");
+        }
+        
+        sendItems();
+        return;
+    }
+
+    // 2. Check Namespace completion (e.g. Ns::, G::)
+    std::regex nsRegex(R"(([_a-zA-Z0-9]+)::\s*([_a-zA-Z0-9]*)$)");
+    std::smatch nsMatch;
+    if (!linePrefix.empty() && std::regex_search(linePrefix, nsMatch, nsRegex)) {
+        std::string nsName = nsMatch[1].str();
+        std::string targetImport = "";
+        if (itDoc != openDocuments.end() && itDoc->second.tree) {
+            for (const auto &child : itDoc->second.tree->getChildren()) {
+                if (child->getNodeType() == AST::Import) {
+                    auto imp = std::static_pointer_cast<ImportNode>(child);
+                    if (imp->importAlias() == nsName || imp->importName() == nsName) {
+                        targetImport = imp->importName();
+                        break;
+                    }
+                }
+            }
+        }
+        if (targetImport.empty()) targetImport = nsName;
+
+        std::string currentPath = uriToPath(uri);
+        std::filesystem::path curDir = std::filesystem::path(currentPath).parent_path();
+        std::string sRoot = findStrideRoot(uri);
+        std::vector<std::filesystem::path> candDirs;
+        if (!curDir.empty() && std::filesystem::exists(curDir)) candDirs.push_back(curDir);
+        if (!sRoot.empty()) {
+            candDirs.push_back(std::filesystem::path(sRoot));
+            candDirs.push_back(std::filesystem::path(sRoot) / "library" / "1.0");
+        }
+
+        std::vector<std::filesystem::path> targetFiles;
+        for (const auto &d : candDirs) {
+            std::filesystem::path cand = d / (targetImport + ".stride");
+            if (std::filesystem::exists(cand) && std::filesystem::is_regular_file(cand)) {
+                targetFiles.push_back(cand);
+            }
+            std::filesystem::path candDir = d / targetImport;
+            if (std::filesystem::exists(candDir) && std::filesystem::is_directory(candDir)) {
+                for (const auto &entry : std::filesystem::directory_iterator(candDir)) {
+                    if (entry.is_regular_file() && entry.path().extension() == ".stride") {
+                        targetFiles.push_back(entry.path());
+                    }
+                }
+            }
+        }
+
+        for (const auto &tf : targetFiles) {
+            std::string pathKey = tf.string();
+            ASTNode impTree = nullptr;
+            auto itCache = g_importCache.find(pathKey);
+            if (itCache != g_importCache.end()) {
+                impTree = itCache->second;
+            } else {
+                impTree = AST::parseFile(tf.string().c_str(), tf.string().c_str());
+                if (impTree) g_importCache[pathKey] = impTree;
+            }
+            if (impTree) {
+                for (const auto &child : impTree->getChildren()) {
+                    auto decl = std::dynamic_pointer_cast<DeclarationNode>(child);
+                    if (decl && !decl->getName().empty()) {
+                        std::string dName = decl->getName();
+                        std::string ent = decl->getEntityType();
+                        int k = 6;
+                        if (ent == "module" || ent == "reaction" || ent == "loop") k = 3;
+                        else if (ent == "constant") k = 21;
+                        else if (ent == "state" || ent == "transition") k = 22;
+                        else if (ent == "type" || ent == "_domainDefinition") k = 7;
+                        addItem(dName, k, ent + " (" + tf.filename().string() + ")", extractMetaDoc(decl));
+                    }
+                }
+            }
+        }
+
+        if (itDoc != openDocuments.end() && itDoc->second.tree) {
+            for (const auto &child : itDoc->second.tree->getChildren()) {
+                auto decl = std::dynamic_pointer_cast<DeclarationNode>(child);
+                if (decl && decl->getName() == nsName && decl->getEntityType() == "feature") {
+                    auto varVal = decl->getPropertyValue("variants");
+                    if (varVal) {
+                        for (const auto &vChild : varVal->getChildren()) {
+                            auto vDecl = std::dynamic_pointer_cast<DeclarationNode>(vChild);
+                            if (vDecl && !vDecl->getName().empty()) {
+                                addItem(vDecl->getName(), 20, "Variant of " + nsName, extractMetaDoc(vDecl));
+                            } else {
+                                auto valNode = std::dynamic_pointer_cast<ValueNode>(vChild);
+                                if (valNode && valNode->getNodeType() == AST::String) {
+                                    addItem(valNode->getStringValue(), 20, "Variant of " + nsName);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        sendItems();
+        return;
+    }
+
     // 1. Built-in keywords, types, and properties
     static const struct { const char *name; int kind; const char *detail; } builtins[] = {
         {"_domainDefinition", 7, "Domain Definition"},
@@ -2137,22 +2388,7 @@ void handleCompletion(const std::string &id, const std::string &uri = "", int li
         addTreeDecls(it->second.importedTree);
     }
 
-    std::ostringstream json;
-    json << "{\"jsonrpc\":\"2.0\",\"id\":" << id << ",\"result\":{\"isIncomplete\":false,\"items\":[";
-    for (size_t i = 0; i < items.size(); i++) {
-        if (i > 0) json << ",";
-        const auto &item = items[i];
-        json << "{\"label\":\"" << escapeJson(item.label) << "\",\"kind\":" << item.kind;
-        if (!item.detail.empty()) {
-            json << ",\"detail\":\"" << escapeJson(item.detail) << "\"";
-        }
-        if (!item.doc.empty()) {
-            json << ",\"documentation\":{\"kind\":\"markdown\",\"value\":\"" << escapeJson(item.doc) << "\"}";
-        }
-        json << "}";
-    }
-    json << "]}}";
-    sendLspResponse(json.str());
+    sendItems();
 }
 
 void handleDefinition(const std::string &id, const std::string &uri, int line, int character) {
@@ -2176,32 +2412,82 @@ void handleDefinition(const std::string &id, const std::string &uri, int line, i
             curLineIdx++;
         }
 
-        std::string token = getWordAtPosition(it->second.text, line, character);
+        TokenAtPosition tokenInfo = getTokenAtPosition(it->second.text, line, character);
+        std::string token = tokenInfo.token;
         if (!token.empty()) {
-            size_t impPos = lineText.find("import");
-            if (impPos == std::string::npos) impPos = lineText.find("use");
-            if (impPos != std::string::npos && token != "import" && token != "use" && token != "as" && token != "version") {
-                std::string sRoot = findStrideRoot("");
-                std::vector<std::filesystem::path> candidates = {
-                    currentDir / (token + ".stride"),
-                    currentDir / token,
-                    currentDir / token / (token + ".stride")
-                };
-                if (!sRoot.empty()) {
-                    candidates.push_back(std::filesystem::path(sRoot) / (token + ".stride"));
-                    candidates.push_back(std::filesystem::path(sRoot) / "library" / (token + ".stride"));
-                    candidates.push_back(std::filesystem::path(sRoot) / "library" / "1.0" / (token + ".stride"));
+            if (tokenInfo.precededByDoubleColon && !tokenInfo.nsTargetEntity.empty()) {
+                ScopeStack scopeStack = it->second.tree ? buildScopeStackForPosition(it->second.tree, line + 1) : ScopeStack();
+                auto decl = findSymbolOrType(token, scopeStack, it->second.tree, it->second.importedTree);
+                if (decl) {
+                    int declLine = (decl->getLine() > 0) ? (decl->getLine() - 1) : 0;
+                    std::string targetUri = uri;
+                    if (!decl->getFilename().empty()) {
+                        std::string fn = decl->getFilename();
+                        if (fn.rfind("file://", 0) != 0) {
+                            std::error_code ec;
+                            std::filesystem::path p = std::filesystem::absolute(fn, ec);
+                            if (ec) p = std::filesystem::path(fn);
+                            targetUri = "file:///" + p.generic_string();
+                        } else {
+                            targetUri = fn;
+                        }
+                    }
+                    std::ostringstream r;
+                    r << "{\"uri\":\"" << escapeJson(targetUri) << "\",\"range\":{\"start\":{\"line\":" << declLine << ",\"character\":0},\"end\":{\"line\":" << declLine << ",\"character\":100}}}";
+                    result = r.str();
                 }
-                for (const auto &cand : candidates) {
-                    if (std::filesystem::exists(cand) && std::filesystem::is_regular_file(cand)) {
-                        std::string targetUri = "file:///" + cand.generic_string();
-                        std::ostringstream r;
-                        r << "{";
-                        r << "\"uri\":\"" << escapeJson(targetUri) << "\",";
-                        r << "\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":0,\"character\":0}}";
-                        r << "}";
-                        result = r.str();
-                        break;
+            } else if (tokenInfo.followedByDoubleColon) {
+                if (it->second.tree) {
+                    for (const auto &child : it->second.tree->getChildren()) {
+                        if (child->getNodeType() == AST::Import) {
+                            auto imp = std::static_pointer_cast<ImportNode>(child);
+                            if (imp->importAlias() == token || imp->importName() == token) {
+                                int impLine = (imp->getLine() > 0) ? (imp->getLine() - 1) : 0;
+                                std::ostringstream r;
+                                r << "{\"uri\":\"" << escapeJson(uri) << "\",\"range\":{\"start\":{\"line\":" << impLine << ",\"character\":0},\"end\":{\"line\":" << impLine << ",\"character\":100}}}";
+                                result = r.str();
+                                break;
+                            }
+                        } else if (child->getNodeType() == AST::Declaration) {
+                            auto d = std::dynamic_pointer_cast<DeclarationNode>(child);
+                            if (d && d->getName() == token && d->getEntityType() == "feature") {
+                                int fLine = (d->getLine() > 0) ? (d->getLine() - 1) : 0;
+                                std::ostringstream r;
+                                r << "{\"uri\":\"" << escapeJson(uri) << "\",\"range\":{\"start\":{\"line\":" << fLine << ",\"character\":0},\"end\":{\"line\":" << fLine << ",\"character\":100}}}";
+                                result = r.str();
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (result == "null") {
+                size_t impPos = lineText.find("import");
+                if (impPos == std::string::npos) impPos = lineText.find("use");
+                if (impPos != std::string::npos && token != "import" && token != "use" && token != "as" && token != "version") {
+                    std::string sRoot = findStrideRoot("");
+                    std::vector<std::filesystem::path> candidates = {
+                        currentDir / (token + ".stride"),
+                        currentDir / token,
+                        currentDir / token / (token + ".stride")
+                    };
+                    if (!sRoot.empty()) {
+                        candidates.push_back(std::filesystem::path(sRoot) / (token + ".stride"));
+                        candidates.push_back(std::filesystem::path(sRoot) / "library" / (token + ".stride"));
+                        candidates.push_back(std::filesystem::path(sRoot) / "library" / "1.0" / (token + ".stride"));
+                    }
+                    for (const auto &cand : candidates) {
+                        if (std::filesystem::exists(cand) && std::filesystem::is_regular_file(cand)) {
+                            std::string targetUri = "file:///" + cand.generic_string();
+                            std::ostringstream r;
+                            r << "{";
+                            r << "\"uri\":\"" << escapeJson(targetUri) << "\",";
+                            r << "\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":0,\"character\":0}}";
+                            r << "}";
+                            result = r.str();
+                            break;
+                        }
                     }
                 }
             }
@@ -2407,7 +2693,7 @@ int main(int argc, char **argv) {
                 "\"textDocumentSync\":1,"
                 "\"hoverProvider\":true,"
                 "\"documentSymbolProvider\":true,"
-                "\"completionProvider\":{\"triggerCharacters\":[\".\",\":\",\">\",\"@\",\"[\"]},"
+                "\"completionProvider\":{\"triggerCharacters\":[\".\",\":\",\">\",\"@\",\"[\",\"/\",\"\\\\\",\"\\\"\",\"'\"]},"
                 "\"definitionProvider\":true"
                 "}}}";
             sendLspResponse(initResponse);
