@@ -86,6 +86,203 @@ export function maskCommentsAndStrings(text: string): string {
     return chars.join('');
 }
 
+/**
+ * Splits top-level commas inside a bracketed or parenthesized expression,
+ * respecting nested quotes, brackets, and braces.
+ */
+export function splitByTopLevelCommas(innerStr: string): string[] {
+    const parts: string[] = [];
+    let current = '';
+    let parenDepth = 0;
+    let bracketDepth = 0;
+    let braceDepth = 0;
+    let inString: false | '"' | "'" = false;
+    let escape = false;
+
+    for (let i = 0; i < innerStr.length; i++) {
+        const c = innerStr[i];
+
+        if (inString !== false) {
+            current += c;
+            if (escape) {
+                escape = false;
+            } else if (c === '\\') {
+                escape = true;
+            } else if (c === inString) {
+                inString = false;
+            }
+            continue;
+        }
+
+        if (c === '"' || c === "'") {
+            inString = c;
+            current += c;
+            continue;
+        }
+
+        if (c === '(') parenDepth++;
+        else if (c === ')') parenDepth = Math.max(0, parenDepth - 1);
+        else if (c === '[') bracketDepth++;
+        else if (c === ']') bracketDepth = Math.max(0, bracketDepth - 1);
+        else if (c === '{') braceDepth++;
+        else if (c === '}') braceDepth = Math.max(0, braceDepth - 1);
+
+        if (c === ',' && parenDepth === 0 && bracketDepth === 0 && braceDepth === 0) {
+            parts.push(current.trim());
+            current = '';
+        } else {
+            current += c;
+        }
+    }
+
+    if (current.trim().length > 0) {
+        parts.push(current.trim());
+    }
+
+    return parts;
+}
+
+/**
+ * Wraps long function argument lists `Func(a, b, c)` or bundles `[a, b, c]`
+ * onto multiple lines if exceeding printWidth.
+ */
+export function wrapArgumentsOrBundles(line: string, printWidth: number): string[] {
+    const masked = maskCommentsAndStrings(line);
+
+    // Look for outermost `(...)` with commas
+    const parenMatch = masked.match(/([_a-zA-Z0-9]+)\s*\(([^)]+)\)/);
+    if (parenMatch && line.length > printWidth) {
+        const fullCall = parenMatch[0];
+        const fnName = parenMatch[1];
+        const innerArgs = parenMatch[2];
+        const commaParts = splitByTopLevelCommas(innerArgs);
+
+        if (commaParts.length > 1) {
+            const callStart = masked.indexOf(fullCall);
+            const prefix = line.substring(0, callStart).trimEnd();
+            const suffix = line.substring(callStart + fullCall.length).trimStart();
+
+            const broken: string[] = [];
+            const header = (prefix.length > 0 ? prefix + ' ' : '') + fnName + '(';
+            broken.push(header);
+            for (let k = 0; k < commaParts.length; k++) {
+                const arg = commaParts[k];
+                const isLast = k === commaParts.length - 1;
+                broken.push(arg + (isLast ? '' : ','));
+            }
+            broken.push(')' + (suffix.length > 0 ? ' ' + suffix : ''));
+            return broken;
+        }
+    }
+
+    // Look for long bundle `[...]` with commas
+    const bundleMatch = masked.match(/\[([^\]]+)\]/);
+    if (bundleMatch && line.length > printWidth) {
+        const fullBundle = bundleMatch[0];
+        const innerItems = bundleMatch[1];
+        const commaParts = splitByTopLevelCommas(innerItems);
+
+        if (commaParts.length > 1) {
+            const bundleStart = masked.indexOf(fullBundle);
+            const prefix = line.substring(0, bundleStart).trimEnd();
+            const suffix = line.substring(bundleStart + fullBundle.length).trimStart();
+
+            const broken: string[] = [];
+            broken.push((prefix.length > 0 ? prefix + ' ' : '') + '[');
+            for (let k = 0; k < commaParts.length; k++) {
+                const item = commaParts[k];
+                const isLast = k === commaParts.length - 1;
+                broken.push(item + (isLast ? '' : ','));
+            }
+            broken.push(']' + (suffix.length > 0 ? ' ' + suffix : ''));
+            return broken;
+        }
+    }
+
+    return [line];
+}
+
+/**
+ * Pre-processes lines: if a line exceeds printWidth, breaks it at top-level `>>`
+ * and/or wraps long argument lists `(...)` and bundles `[...]`.
+ */
+export function wrapLongLines(text: string, printWidth: number = 100): string {
+    const lines = text.split(/\r?\n/);
+    const outLines: string[] = [];
+
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+
+        // If line fits within printWidth, keep it as is
+        if (line.length <= printWidth) {
+            outLines.push(line);
+            continue;
+        }
+
+        const trimmed = line.trim();
+
+        // Do not wrap comment lines
+        if (trimmed.startsWith('#') || trimmed.startsWith('//') || trimmed.startsWith('/*')) {
+            outLines.push(line);
+            continue;
+        }
+
+        const masked = maskCommentsAndStrings(line);
+
+        // Check for long stream lines containing top-level `>>`
+        // Find positions of `>>` outside of (), [], {}
+        const streamOpIndices: number[] = [];
+        let pDepth = 0, bDepth = 0, brDepth = 0;
+        for (let j = 0; j < masked.length - 1; j++) {
+            const c = masked[j];
+            if (c === '(') pDepth++;
+            else if (c === ')') pDepth = Math.max(0, pDepth - 1);
+            else if (c === '[') bDepth++;
+            else if (c === ']') bDepth = Math.max(0, bDepth - 1);
+            else if (c === '{') brDepth++;
+            else if (c === '}') brDepth = Math.max(0, brDepth - 1);
+
+            if (pDepth === 0 && bDepth === 0 && brDepth === 0 && c === '>' && masked[j + 1] === '>') {
+                streamOpIndices.push(j);
+            }
+        }
+
+        if (streamOpIndices.length > 0) {
+            // Split stream into stages
+            const stages: string[] = [];
+            let lastIdx = 0;
+            for (const opIdx of streamOpIndices) {
+                const stage = line.substring(lastIdx, opIdx).trim();
+                if (stage.length > 0) {
+                    stages.push(stage);
+                }
+                lastIdx = opIdx;
+            }
+            const lastStage = line.substring(lastIdx).trim();
+            if (lastStage.length > 0) {
+                stages.push(lastStage);
+            }
+
+            if (stages.length > 1) {
+                for (const st of stages) {
+                    if (st.length > printWidth) {
+                        outLines.push(...wrapArgumentsOrBundles(st, printWidth));
+                    } else {
+                        outLines.push(st);
+                    }
+                }
+                continue;
+            }
+        }
+
+        // If no top-level >> or only 1 stage, check if it has long arguments or bundles
+        const wrapped = wrapArgumentsOrBundles(line, printWidth);
+        outLines.push(...wrapped);
+    }
+
+    return outLines.join('\n');
+}
+
 export interface StrideFormatOptions {
     tabWidth?: number;
     useTabs?: boolean;
@@ -101,9 +298,13 @@ export interface StrideFormatOptions {
 export function formatStrideText(text: string, options: StrideFormatOptions = {}): string {
     const tabWidth = options.tabWidth ?? 4;
     const useTabs = options.useTabs ?? false;
+    const printWidth = options.printWidth ?? 100;
 
-    const lines = text.split(/\r?\n/);
-    const maskedText = maskCommentsAndStrings(text);
+    // Wrap long streams (>>), arguments, and bundles exceeding printWidth
+    const wrappedText = wrapLongLines(text, printWidth);
+
+    const lines = wrappedText.split(/\r?\n/);
+    const maskedText = maskCommentsAndStrings(wrappedText);
     const maskedLines = maskedText.split(/\r?\n/);
 
     let indentLevel = 0;
@@ -222,7 +423,7 @@ export async function provideDocumentFormattingEdits(
 
     const tabWidth = resolvedConfig?.tabWidth ?? options.tabSize ?? 4;
     const useTabs = resolvedConfig?.useTabs ?? (!options.insertSpaces);
-    const printWidth = resolvedConfig?.printWidth ?? 120;
+    const printWidth = resolvedConfig?.printWidth ?? 100;
 
     const originalText = document.getText();
     const formatted = formatStrideText(originalText, { tabWidth, useTabs, printWidth });
@@ -264,6 +465,7 @@ export async function provideDocumentRangeFormattingEdits(
 
     const tabWidth = resolvedConfig?.tabWidth ?? options.tabSize ?? 4;
     const useTabs = resolvedConfig?.useTabs ?? (!options.insertSpaces);
+    const printWidth = resolvedConfig?.printWidth ?? 100;
     const indentUnit = useTabs ? '\t' : ' '.repeat(tabWidth);
 
     const startLine = range.start.line;
@@ -308,16 +510,82 @@ export async function provideDocumentRangeFormattingEdits(
         const effectiveIndent = currentLineIndent + (isContinuation ? 1 : 0);
 
         if (i >= startLine && i <= endLine) {
-            let targetLine: string;
-            if (trimmed.length === 0) {
-                targetLine = '';
-            } else {
-                targetLine = indentUnit.repeat(effectiveIndent) + trimmed;
-            }
+            if (orig.length > printWidth) {
+                const sublines = wrapLongLines(orig, printWidth).split(/\r?\n/);
+                if (sublines.length > 1) {
+                    const formattedSublines: string[] = [];
+                    let tempIndentLevel = indentLevel;
+                    let tempStreamCont = inStreamContinuation;
+                    let tempStreamBase = streamBaseIndent;
 
-            if (orig !== targetLine) {
-                const lineRange = document.lineAt(i).range;
-                edits.push(vscode.TextEdit.replace(lineRange, targetLine));
+                    for (const sub of sublines) {
+                        const subTrimmed = sub.trim();
+                        if (subTrimmed.length === 0) continue;
+                        const subMasked = maskCommentsAndStrings(subTrimmed);
+                        const subLeadingCloseMatch = subMasked.match(/^[\}\]\)\s]+/);
+                        const subLeadingCloseCount = subLeadingCloseMatch
+                            ? subLeadingCloseMatch[0].replace(/\s/g, '').length
+                            : 0;
+
+                        const subLineIndent = Math.max(0, tempIndentLevel - subLeadingCloseCount);
+                        const subStartsWithStream = subMasked.startsWith('>>');
+                        if (subStartsWithStream && !tempStreamCont) {
+                            tempStreamCont = true;
+                            tempStreamBase = subLineIndent;
+                        }
+                        const subIsCont = tempStreamCont && (subLineIndent >= tempStreamBase);
+                        const subEffectiveIndent = subLineIndent + (subIsCont ? 1 : 0);
+
+                        formattedSublines.push(indentUnit.repeat(subEffectiveIndent) + subTrimmed);
+
+                        const subOpens = (subMasked.match(/[\{\[\(]/g) || []).length;
+                        const subCloses = (subMasked.match(/[\}\]\)]/g) || []).length;
+                        const subNewIndent = Math.max(0, tempIndentLevel + subOpens - subCloses);
+
+                        const subHasSemicolon = subMasked.endsWith(';') || (subMasked.includes(';') && subCloses >= subOpens);
+                        if (tempStreamCont) {
+                            if (subHasSemicolon && subNewIndent <= tempStreamBase) {
+                                tempStreamCont = false;
+                            } else if (subNewIndent < tempStreamBase) {
+                                tempStreamCont = false;
+                            }
+                        } else if (subMasked.includes('>>') && !subHasSemicolon) {
+                            tempStreamCont = true;
+                            tempStreamBase = subLineIndent;
+                        }
+                        tempIndentLevel = subNewIndent;
+                    }
+
+                    const multiLineResult = formattedSublines.join('\n');
+                    if (orig !== multiLineResult) {
+                        const lineRange = document.lineAt(i).range;
+                        edits.push(vscode.TextEdit.replace(lineRange, multiLineResult));
+                    }
+                } else {
+                    let targetLine: string;
+                    if (trimmed.length === 0) {
+                        targetLine = '';
+                    } else {
+                        targetLine = indentUnit.repeat(effectiveIndent) + trimmed;
+                    }
+
+                    if (orig !== targetLine) {
+                        const lineRange = document.lineAt(i).range;
+                        edits.push(vscode.TextEdit.replace(lineRange, targetLine));
+                    }
+                }
+            } else {
+                let targetLine: string;
+                if (trimmed.length === 0) {
+                    targetLine = '';
+                } else {
+                    targetLine = indentUnit.repeat(effectiveIndent) + trimmed;
+                }
+
+                if (orig !== targetLine) {
+                    const lineRange = document.lineAt(i).range;
+                    edits.push(vscode.TextEdit.replace(lineRange, targetLine));
+                }
             }
         }
 

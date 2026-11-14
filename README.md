@@ -80,6 +80,12 @@ To automatically format and clean up Stride files whenever you save them, config
 > [!TIP]
 > **Customizing Indentation & Prettier Options**:
 > The formatter respects your active VS Code indentation settings (`editor.tabSize` and `editor.insertSpaces`). If your workspace contains a `.prettierrc` configuration file, the formatter will also automatically detect and apply project-level Prettier rules (such as `tabWidth`, `useTabs`, and `printWidth`).
+>
+> **Long Line Wrapping (default: 100 characters)**:
+> Lines exceeding the configured `printWidth` (default: 100 characters) are automatically broken into structured multi-line layouts with proper indentation:
+> - **Streams**: Broken at `>>` operators onto new lines with stream continuation indentation (+1 level).
+> - **Function Calls**: Long parameter/argument lists inside `(...)` are split into indented, comma-separated arguments with closing `)` aligned with the call.
+> - **Signal Bundles**: Long bundles `[...]` are split into one item per indented line with closing `]` aligned with the parent construct.
 
 ---
 

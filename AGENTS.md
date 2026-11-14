@@ -146,6 +146,11 @@ The extension bundles a dedicated code formatting engine implemented in [`src/fo
   - Multi-line streams split across lines (lines starting with `>>` or following an uncompleted stream without a terminating semicolon `;`) receive an automatic continuation indent (+1 level).
   - Blocks opened on continuation lines (such as `>> reaction { ... }`) maintain their relative nesting depth (+1 level above the reaction head).
   - Continuation indent terminates automatically upon encountering `;` at or above the stream base indent.
+- **Long Line Wrapping & Re-indentation (`printWidth`, default: 100)**:
+  - Lines exceeding `printWidth` are automatically wrapped at natural syntax boundaries prior to indentation calculation:
+    - Streams split at top-level `>>` operators with continuation indentation applied.
+    - Function calls with long argument lists split into one comma-separated argument per line inside `(...)`.
+    - Signal bundles split into one comma-separated signal per line inside `[...]`.
 - **Cleanup on Save**:
   - Automatically compatible with VS Code's `editor.formatOnSave`.
   - Supports `files.trimTrailingWhitespace`, `files.insertFinalNewline` (POSIX trailing newline), and `files.trimFinalNewlines`.
