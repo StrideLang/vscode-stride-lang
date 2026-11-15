@@ -2052,14 +2052,18 @@ void handleCompletion(const std::string &id, const std::string &uri = "", int li
         int kind;
         std::string detail;
         std::string doc;
+        std::string insertText;
+        int insertTextFormat = 1;
     };
     std::vector<CompItem> items;
     std::unordered_set<std::string> seen;
 
-    auto addItem = [&](const std::string &label, int kind, const std::string &detail = "", const std::string &doc = "") {
-        if (label.empty() || seen.count(label)) return;
-        seen.insert(label);
-        items.push_back({label, kind, detail, doc});
+    auto addItem = [&](const std::string &label, int kind, const std::string &detail = "", const std::string &doc = "", const std::string &insertText = "", int insertTextFormat = 1) {
+        if (label.empty()) return;
+        std::string key = label + "#" + std::to_string(kind);
+        if (seen.count(key)) return;
+        seen.insert(key);
+        items.push_back({label, kind, detail, doc, insertText, insertTextFormat});
     };
 
     auto sendItems = [&]() {
@@ -2074,6 +2078,10 @@ void handleCompletion(const std::string &id, const std::string &uri = "", int li
             }
             if (!item.doc.empty()) {
                 json << ",\"documentation\":{\"kind\":\"markdown\",\"value\":\"" << escapeJson(item.doc) << "\"}";
+            }
+            if (!item.insertText.empty()) {
+                json << ",\"insertText\":\"" << escapeJson(item.insertText) << "\"";
+                json << ",\"insertTextFormat\":" << item.insertTextFormat;
             }
             json << "}";
         }
@@ -2328,11 +2336,90 @@ void handleCompletion(const std::string &id, const std::string &uri = "", int li
         {"guard:", 10, "Property: boolean condition guard"},
         {"targetState:", 10, "Property: destination state"},
         {"blocks:", 10, "Property: inner blocks / declarations"},
-        {"ports:", 10, "Property: module ports"}
+        {"ports:", 10, "Property: module ports"},
+        {"entities:", 10, "Property: inner entity declarations"},
+        {"streams:", 10, "Property: stream connections and pipelines"},
+        {"terminateWhen:", 10, "Property: loop termination condition"}
     };
     for (const auto &b : builtins) {
         addItem(b.name, b.kind, b.detail);
     }
+
+    static const std::string moduleSnippet =
+        "module ${1:MyModule} {\n"
+        "\tports: [\n"
+        "\t\tmainInputPort ${2:InputPort} {\n"
+        "\t\t\tentity: ${3:Input}\n"
+        "\t\t},\n"
+        "\t\tmainOutputPort ${4:OutputPort} {\n"
+        "\t\t\tentity: ${5:Output}\n"
+        "\t\t}\n"
+        "\t]\n"
+        "\tentities: [\n"
+        "\t\tsignal ${3:Input} { type: Real }\n"
+        "\t\tsignal ${5:Output} { type: Real }\n"
+        "\t]\n"
+        "\tstreams: [\n"
+        "\t\t${3:Input} >> ${5:Output};\n"
+        "\t]\n"
+        "\tmeta: \"${6:Module description}\"\n"
+        "}\n$0";
+
+    static const std::string reactionSnippet =
+        "reaction ${1:MyReaction} {\n"
+        "\tports: [\n"
+        "\t\tpropertyInputPort ${2:TriggerPort} {\n"
+        "\t\t\tentity: ${3:Trigger}\n"
+        "\t\t},\n"
+        "\t\tmainInputPort ${4:InputPort} {\n"
+        "\t\t\tentity: ${5:Input}\n"
+        "\t\t},\n"
+        "\t\tmainOutputPort ${6:OutputPort} {\n"
+        "\t\t\tentity: ${7:Output}\n"
+        "\t\t}\n"
+        "\t]\n"
+        "\tentities: [\n"
+        "\t\tswitch ${3:Trigger} { default: off }\n"
+        "\t\tsignal ${5:Input} { type: Real }\n"
+        "\t\tsignal ${7:Output} { type: Real }\n"
+        "\t]\n"
+        "\tstreams: [\n"
+        "\t\t${5:Input} >> ${7:Output};\n"
+        "\t]\n"
+        "\tmeta: \"${8:Reaction description}\"\n"
+        "}\n$0";
+
+    static const std::string loopSnippet =
+        "loop ${1:MyLoop} {\n"
+        "\tports: [\n"
+        "\t\tmainInputPort ${2:InputPort} {\n"
+        "\t\t\tentity: ${3:Input}\n"
+        "\t\t},\n"
+        "\t\tmainOutputPort ${4:OutputPort} {\n"
+        "\t\t\tentity: ${5:Output}\n"
+        "\t\t}\n"
+        "\t]\n"
+        "\tentities: [\n"
+        "\t\tsignal ${3:Input} { type: Real }\n"
+        "\t\tsignal ${5:Output} { default: 0.0, type: Real }\n"
+        "\t\tsignal ${6:Index} { default: 0, type: Int }\n"
+        "\t\tswitch ${7:Done} { default: off }\n"
+        "\t]\n"
+        "\tterminateWhen: ${7:Done}\n"
+        "\tstreams: [\n"
+        "\t\t${3:Input} + ${5:Output} >> ${5:Output};\n"
+        "\t\t${6:Index} + 1 >> ${6:Index};\n"
+        "\t\t[${6:Index}, ${8:10}] >> GreaterOrEqual() >> ${7:Done};\n"
+        "\t]\n"
+        "\tmeta: \"${9:Loop description}\"\n"
+        "}\n$0";
+
+    addItem("module", 15, "Module template (ports, entities, streams)", "Boilerplate template for a Stride module with ports, entities, and streams.", moduleSnippet, 2);
+    addItem("module-template", 15, "Module template (ports, entities, streams)", "Boilerplate template for a Stride module with ports, entities, and streams.", moduleSnippet, 2);
+    addItem("reaction", 15, "Reaction template (ports, entities, streams)", "Boilerplate template for a reactive Stride function triggered by an event switch.", reactionSnippet, 2);
+    addItem("reaction-template", 15, "Reaction template (ports, entities, streams)", "Boilerplate template for a reactive Stride function triggered by an event switch.", reactionSnippet, 2);
+    addItem("loop", 15, "Loop template (ports, entities, streams)", "Boilerplate template for a Stride loop function with termination condition.", loopSnippet, 2);
+    addItem("loop-template", 15, "Loop template (ports, entities, streams)", "Boilerplate template for a Stride loop function with termination condition.", loopSnippet, 2);
 
     // 2. Add library members from g_library
     auto members = g_library.getLibraryMembers();

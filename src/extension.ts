@@ -18,6 +18,7 @@ import {
     MarkdownString,
     CompletionItem,
     CompletionItemKind,
+    SnippetString,
     Location,
     Uri,
     Diagnostic,
@@ -4335,10 +4336,111 @@ function registerFallbackProviders(context: ExtensionContext) {
                 'playerTypes:', 'supplies:', 'setupActions:', 'board:', 'stateMachines:', 'end:'
             ];
 
+            const moduleSnippetText =
+                'module ${1:MyModule} {\n' +
+                '\tports: [\n' +
+                '\t\tmainInputPort ${2:InputPort} {\n' +
+                '\t\t\tentity: ${3:Input}\n' +
+                '\t\t},\n' +
+                '\t\tmainOutputPort ${4:OutputPort} {\n' +
+                '\t\t\tentity: ${5:Output}\n' +
+                '\t\t}\n' +
+                '\t]\n' +
+                '\tentities: [\n' +
+                '\t\tsignal ${3:Input} { type: Real }\n' +
+                '\t\tsignal ${5:Output} { type: Real }\n' +
+                '\t]\n' +
+                '\tstreams: [\n' +
+                '\t\t${3:Input} >> ${5:Output};\n' +
+                '\t]\n' +
+                '\tmeta: "${6:Module description}"\n' +
+                '}\n$0';
+
+            const reactionSnippetText =
+                'reaction ${1:MyReaction} {\n' +
+                '\tports: [\n' +
+                '\t\tpropertyInputPort ${2:TriggerPort} {\n' +
+                '\t\t\tentity: ${3:Trigger}\n' +
+                '\t\t},\n' +
+                '\t\tmainInputPort ${4:InputPort} {\n' +
+                '\t\t\tentity: ${5:Input}\n' +
+                '\t\t},\n' +
+                '\t\tmainOutputPort ${6:OutputPort} {\n' +
+                '\t\t\tentity: ${7:Output}\n' +
+                '\t\t}\n' +
+                '\t]\n' +
+                '\tentities: [\n' +
+                '\t\tswitch ${3:Trigger} { default: off }\n' +
+                '\t\tsignal ${5:Input} { type: Real }\n' +
+                '\t\tsignal ${7:Output} { type: Real }\n' +
+                '\t]\n' +
+                '\tstreams: [\n' +
+                '\t\t${5:Input} >> ${7:Output};\n' +
+                '\t]\n' +
+                '\tmeta: "${8:Reaction description}"\n' +
+                '}\n$0';
+
+            const loopSnippetText =
+                'loop ${1:MyLoop} {\n' +
+                '\tports: [\n' +
+                '\t\tmainInputPort ${2:InputPort} {\n' +
+                '\t\t\tentity: ${3:Input}\n' +
+                '\t\t},\n' +
+                '\t\tmainOutputPort ${4:OutputPort} {\n' +
+                '\t\t\tentity: ${5:Output}\n' +
+                '\t\t}\n' +
+                '\t]\n' +
+                '\tentities: [\n' +
+                '\t\tsignal ${3:Input} { type: Real }\n' +
+                '\t\tsignal ${5:Output} { default: 0.0, type: Real }\n' +
+                '\t\tsignal ${6:Index} { default: 0, type: Int }\n' +
+                '\t\tswitch ${7:Done} { default: off }\n' +
+                '\t]\n' +
+                '\tterminateWhen: ${7:Done}\n' +
+                '\tstreams: [\n' +
+                '\t\t${3:Input} + ${5:Output} >> ${5:Output};\n' +
+                '\t\t${6:Index} + 1 >> ${6:Index};\n' +
+                '\t\t[${6:Index}, ${8:10}] >> GreaterOrEqual() >> ${7:Done};\n' +
+                '\t]\n' +
+                '\tmeta: "${9:Loop description}"\n' +
+                '}\n$0';
+
+            const snippetDefs = [
+                {
+                    labels: ['module', 'module-template'],
+                    text: moduleSnippetText,
+                    detail: 'Module template (ports, entities, streams)',
+                    doc: 'Boilerplate template for a Stride module with ports, entities, and streams.'
+                },
+                {
+                    labels: ['reaction', 'reaction-template'],
+                    text: reactionSnippetText,
+                    detail: 'Reaction template (ports, entities, streams)',
+                    doc: 'Boilerplate template for a reactive Stride function triggered by an event switch.'
+                },
+                {
+                    labels: ['loop', 'loop-template'],
+                    text: loopSnippetText,
+                    detail: 'Loop template (ports, entities, streams)',
+                    doc: 'Boilerplate template for a Stride loop function with termination condition.'
+                }
+            ];
+
+            for (const s of snippetDefs) {
+                for (const lbl of s.labels) {
+                    const item = new CompletionItem(lbl, CompletionItemKind.Snippet);
+                    item.insertText = new SnippetString(s.text);
+                    item.detail = s.detail;
+                    item.documentation = new MarkdownString(s.doc);
+                    items.push(item);
+                }
+            }
+
             for (const kw of keywords) {
-                if (!items.find(i => i.label === kw)) {
-                    const isProp = kw.endsWith(':');
-                    const item = new CompletionItem(kw, isProp ? CompletionItemKind.Property : CompletionItemKind.Keyword);
+                const isProp = kw.endsWith(':');
+                const targetKind = isProp ? CompletionItemKind.Property : CompletionItemKind.Keyword;
+                if (!items.some(i => i.label === kw && i.kind === targetKind)) {
+                    const item = new CompletionItem(kw, targetKind);
                     items.push(item);
                 }
             }
